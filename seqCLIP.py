@@ -258,7 +258,7 @@ def train_epoch_clip(net, seqs_list, keywords_list, vocab_size, optimizer, batch
     loss_fn = nn.CrossEntropyLoss() # using it to compare batch seqs and their neighbors' similarities with ones matrix
     permutation = torch.randperm(len(seqs_list))
     all_seq_embeds = []
-    #all_keyword_embeds = []
+    all_keyword_embeds = []
     for i in tqdm(range(0, len(seqs_list), batch_size)):
         optimizer.zero_grad()
         indices = permutation[i:i+batch_size]
@@ -271,7 +271,7 @@ def train_epoch_clip(net, seqs_list, keywords_list, vocab_size, optimizer, batch
         seq_embeds = nn.functional.normalize(seq_embeds)
         keyword_embeds = nn.functional.normalize(keyword_embeds)
         all_seq_embeds.append(seq_embeds)
-        #all_keyword_embeds.append(keyword_embeds)
+        all_keyword_embeds.append(keyword_embeds)
 
         curr_batch_size, embed_dim = seq_embeds.size()
         #similarity = torch.bmm(seq_embeds.view(curr_batch_size, 1, embed_dim), keyword_embeds.view(curr_batch_size, embed_dim, 1)).squeeze()
@@ -297,29 +297,41 @@ def train_epoch_clip(net, seqs_list, keywords_list, vocab_size, optimizer, batch
         
     all_seq_embeds = torch.cat(all_seq_embeds, dim=0).detach().cpu().numpy()
     #print(all_keyword_embeds[-2].shape, all_keyword_embeds[-1].shape)
-    #all_keyword_embeds = torch.cat(all_keyword_embeds, dim=0).detach().cpu().numpy()
-    all_keyword_embeds = get_individual_keyword_embeds(net, vocab_size)
+    all_keyword_embeds = torch.cat(all_keyword_embeds, dim=0).detach().cpu().numpy()
+    ind_keyword_embeds = get_individual_keyword_embeds(net, vocab_size)
 
-    return all_seq_embeds, all_keyword_embeds, total_objective
+    return all_seq_embeds, all_keyword_embeds, ind_keyword_embeds, total_objective
 
 
 def predict_clip(net, vocab_size, seqs_list, keywords_list, batch_size=64, device=None):
     total_seq_embeds = []
     total_keyword_embeds = []
+    loss_fn = nn.CrossEntropyLoss()
+    total_loss = 0
     for i in tqdm(range(0, len(seqs_list), batch_size)):
         batch_seqs = seqs_list[i:i+batch_size]
 
         batch_seqs = collate_padd(batch_seqs, device=device)
         batch_keywords = [torch.from_numpy(np.array(keyword_inds)).to(device) for keyword_inds in keywords_list[i:i+batch_size]]
 
-        seq_embeds, _ = net(batch_seqs, batch_keywords)
+        seq_embeds, keyword_embeds = net(batch_seqs, batch_keywords)
         seq_embeds = nn.functional.normalize(seq_embeds)
 
         total_seq_embeds.append(seq_embeds.detach().cpu().numpy())
-    total_seq_embeds = np.concatenate(total_seq_embeds) 
-    total_keyword_embeds = get_individual_keyword_embeds(net, vocab_size)
+        total_keyword_embeds.append(keyword_embeds.detach().cpu().numpy())
 
-    return total_seq_embeds, total_keyword_embeds
+        similarity = torch.mm(seq_embeds, keyword_embeds.transpose(0,1)).squeeze()
+        similarity *= torch.exp(net.temperature)
+        labels = torch.arange(start=0, end=similarity.shape[0], dtype=torch.long).to(device)
+        loss = (loss_fn(similarity, labels) + loss_fn(similarity.transpose(0,1), labels))/2
+        total_loss += loss.item()
+
+    total_seq_embeds = np.concatenate(total_seq_embeds) 
+    total_keyword_embeds = np.concatenate(total_keyword_embeds) 
+
+    ind_keyword_embeds = get_individual_keyword_embeds(net, vocab_size)
+
+    return total_seq_embeds, total_keyword_embeds, ind_keyword_embeds, total_loss
 
 
 def get_individual_keyword_embeds(model, vocab_size):
@@ -333,19 +345,19 @@ def get_individual_keyword_embeds(model, vocab_size):
     return total_keyword_embeds
 
 
-def get_bottom_k_element_list(sim_mat, k):
-    bottom_k = np.argpartition(sim_mat, k, axis=1)[:, :k]
-    return bottom_k
+def get_top_k_element_list(sim_mat, k):
+    top_k = np.argpartition(sim_mat, sim_mat.shape[1] - k, axis=1)[:, -k:]
+    return top_k
 
 
-def test_embeddings(seq_embeddings, keyword_embeddings, keyword_annot_lists):
+def test_embeddings(seq_embeddings, ind_keyword_embeddings, keyword_annot_lists, all_keyword_embeddings):
     # get nearest keyword_embedding for every seq_embedding (cosine similarity)
     # if keyword_annot_lists contains that keyword embedding, treat as correct prediction
     # report accuracy out of all sequences
-    sim_mat = -cosine_similarity(seq_embeddings, Y=keyword_embeddings) # negative to work with bottom_k
+    sim_mat = cosine_similarity(seq_embeddings, Y=ind_keyword_embeddings) 
     #predicted_keywords = np.argmax(sim_mat, axis=1)
     k = 10
-    predicted_keywords = get_bottom_k_element_list(sim_mat, k)
+    predicted_keywords = get_top_k_element_list(sim_mat, k)
     correct = 0
     jaccard_sims = []
     for i, pred_kw_row in enumerate(predicted_keywords):
@@ -362,7 +374,11 @@ def test_embeddings(seq_embeddings, keyword_embeddings, keyword_annot_lists):
     print(accuracy)
     assert accuracy <= 1
 
-    return accuracy
+    seq_annot_self_sims = np.einsum('ij,ij->i', seq_embeddings, all_keyword_embeddings)
+    avg_self_sim = seq_annot_self_sims.sum()/seq_annot_self_sims.shape[0]
+    print('Average self sim:' + str(avg_self_sim))
+
+    return accuracy, avg_self_sim
 
 
 def find_neighbors(batch_links, seqs):
@@ -486,26 +502,29 @@ def train_clip_model(model, vocab_size, vocab, prot_list, save_prefix, train_seq
     writer = SummaryWriter(log_dir='./' + tensorboard_root_dir + '/' + save_prefix + '_lr_' + str(learning_rate) + '_batch_size_' + str(batch_size) + '/') 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     print('Initial protein embeddings')
-    curr_seq_embeds, curr_keyword_embeds = predict_clip(model, vocab_size, train_seqs, train_keywords, batch_size=batch_size, device=device)
-    curr_accuracy = test_embeddings(curr_seq_embeds, curr_keyword_embeds, train_keywords)
+    curr_seq_embeds, curr_keyword_embeds, ind_keyword_embeds, loss = predict_clip(model, vocab_size, train_seqs, train_keywords, batch_size=batch_size, device=device)
+    curr_accuracy, avg_self_sim = test_embeddings(curr_seq_embeds, ind_keyword_embeds, train_keywords, curr_keyword_embeds)
+    writer.add_scalar('Epoch_Loss/contrastive_embedding_loss', loss, -1)
+    writer.add_scalar('Epoch_Loss/nearest_keyword_accuracy', curr_accuracy, -1)
+    writer.add_scalar('Epoch_Loss/avg_seq_annot_sim', avg_self_sim, -1)
     for epoch in range(epochs):
         net.train()
         optimizer.zero_grad()
-        curr_seq_embeds, curr_keyword_embeds, train_objective = train_epoch_clip(model, train_seqs, train_keywords, vocab_size, optimizer, batch_size=batch_size, device=device)
+        curr_seq_embeds, curr_keyword_embeds, ind_keyword_embeds, train_objective = train_epoch_clip(model, train_seqs, train_keywords, vocab_size, optimizer, batch_size=batch_size, device=device)
         print('Epoch ' + str(epoch) + ': Loss: ' + str(train_objective.item()))
         writer.add_scalar('Epoch_Loss/contrastive_embedding_loss', train_objective, epoch)
         loss_hist.append(train_objective.item())
         projector_embeds = np.concatenate((curr_keyword_embeds, curr_seq_embeds))
-        curr_accuracy = test_embeddings(curr_seq_embeds, curr_keyword_embeds, train_keywords)
+        curr_accuracy, avg_self_sim = test_embeddings(curr_seq_embeds, ind_keyword_embeds, train_keywords, curr_keyword_embeds)
         writer.add_scalar('Epoch_Loss/nearest_keyword_accuracy', curr_accuracy, epoch)
+        writer.add_scalar('Epoch_Loss/avg_seq_annot_sim', avg_self_sim, epoch)
         #projector_labels = all_keywords + prot_list
         #writer.add_embedding(projector_embeds, metadata=projector_labels, global_step=epoch, tag='curr_embeds')
         print(model.temperature)
         if epoch % 10 == 0 or epoch == args.epochs - 1:
             torch.save(net.state_dict(), './saved_models/' + save_prefix + '_epoch_' + str(epoch) + '.pckl')
     writer.close()
-    trained_prot_embeds, _ = predict_clip(model, vocab_size, train_seqs, train_keywords, batch_size=batch_size, device=device)
-    trained_individual_keyword_embeds = get_individual_keyword_embeds(model, vocab_size)
+    trained_prot_embeds, curr_keyword_embeds, trained_individual_keyword_embeds, loss = predict_clip(model, vocab_size, train_seqs, train_keywords, batch_size=batch_size, device=device)
     return trained_prot_embeds, trained_individual_keyword_embeds, loss_hist
 
 
@@ -667,23 +686,23 @@ if __name__ == '__main__':
         net.load_state_dict(state_dict)
         net.to(device)
         print('Continuing to train model for ' + str(args.epochs)) 
-        trained_prot_embeds, trained_individual_keyword_embeds, loss_hist = train_clip_model(net, keyword_vocab_size, all_keywords, prot_list, save_prefix, train_seqs, train_keywords, epochs, batch_size, learning_rate, device)
+        trained_seq_embeds, trained_individual_keyword_embeds, loss_hist = train_clip_model(net, keyword_vocab_size, all_keywords, prot_list, save_prefix, train_seqs, train_keywords, epochs, batch_size, learning_rate, device)
         nets['loss_history'] = [loss for loss in loss_hist]
     elif args.load_model_predict is not None:
         net = seqCLIP(seq_dim, keyword_vocab_size, embed_dim)
         state_dict = torch.load(args.load_model_predict)
         net.load_state_dict(state_dict)
         net.to(device)
-        trained_prot_embeds, _ = predict_clip(net, vocab_size, train_seqs, train_keywords, batch_size=batch_size, device=device)
+        total_seq_embeds, _, ind_keyword_embeds, total_loss = predict_clip(net, vocab_size, train_seqs, train_keywords, batch_size=batch_size, device=device)
         trained_individual_keyword_embeds = get_individual_keyword_embeds(model, vocab_size)
     else:
         net = seqCLIP(seq_dim, keyword_vocab_size, embed_dim)
-        trained_prot_embeds, trained_individual_keyword_embeds, loss_hist = train_clip_model(net, keyword_vocab_size, all_keywords, prot_list, save_prefix, train_seqs, train_keywords, epochs, batch_size, learning_rate, device)
+        trained_seq_embeds, trained_individual_keyword_embeds, loss_hist = train_clip_model(net, keyword_vocab_size, all_keywords, prot_list, save_prefix, train_seqs, train_keywords, epochs, batch_size, learning_rate, device)
 
     outputs = {}
     outputs['prots'] = np.array(keyword_df['Entry'])
     outputs['loss_history'] = [loss for loss in loss_hist]
-    outputs['trained_prot_embeddings'] = trained_prot_embeds
+    outputs['trained_seq_embeddings'] = trained_seq_embeds
     outputs['trained_keyword_embeddings'] = trained_individual_keyword_embeds
     outputs['all_keywords'] = all_keywords
 
