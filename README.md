@@ -1,0 +1,1 @@
+This is a repository for the protein function discovery and one-shot learning method called seqCLIP, inspired by CLIP from OpenAI. This contains code for the discovery of protein functions from sequence information and their uniprot keywords.
