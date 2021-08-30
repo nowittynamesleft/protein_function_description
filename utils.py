@@ -38,6 +38,56 @@ def masked_acc(out, label, mask):
     return acc
 
 
+def row_wise_normalize(mat):
+    # row-wise normalization of nxn matrix
+    n1 = mat.shape[0]
+    with np.errstate(divide='ignore'):
+        row_sums_inv = 1.0/mat.sum(axis=1)
+    row_sums_inv[np.isposinf(row_sums_inv)] = 0
+
+    row_sums_inv = np.asarray(row_sums_inv).reshape(-1)
+    row_sums_inv = sparse.spdiags(row_sums_inv, 0, n1, n1)
+    norm_mat = row_sums_inv.dot(mat)
+
+    return norm_mat
+
+
+def convert_to_tensor(*args, device=None):
+    if len(args) > 1:
+        return [torch.from_numpy(arg).to(device).float() for arg in args]
+    else:
+        return torch.from_numpy(args[0]).to(device).float()
+
+
+def compute_nmi(softmax_scores, y):
+    preds = np.argmax(softmax_scores, axis=1)
+    return nmi(y, preds)
+
+
+def get_common_indices(annot_prots, string_prots):
+    common_prots = list(set(string_prots).intersection(annot_prots))
+    print ("### Number of prots in intersection:", len(common_prots))
+    annot_idx = [annot_prots.index(prot) for prot in common_prots] # annot_idx is the array of indices in the annotation protein list of each protein common to both annotation and string protein lists
+    string_idx = [string_prots.index(prot) for prot in common_prots] # same thing for string protein list
+
+    return annot_idx, string_idx
+
+
+def get_top_k_element_list(sim_mat, k):
+    top_k = np.argpartition(sim_mat, sim_mat.shape[1] - k, axis=1)[:, -k:]
+    return top_k
+
+
+def get_individual_keyword_embeds(model, vocab_size, device):
+    total_keyword_embeds = []
+    for i in range(0, vocab_size):
+        ind = torch.tensor(i, dtype=torch.long).unsqueeze(0).to(device)
+        keyword_embed = model.keyword_embed([ind])
+        keyword_embeds = nn.functional.normalize(keyword_embed)
+        total_keyword_embeds.append(keyword_embeds)
+    total_keyword_embeds = torch.cat(total_keyword_embeds, dim=0).detach().cpu().numpy() 
+    return total_keyword_embeds
+
 
 def sparse_dropout(x, rate, noise_shape):
     """
