@@ -28,72 +28,6 @@ from losses import cluster_entropy, modmax_loss
 
 RANDOM_STATE = 973
 
-
-def make_multi_graph_dataset(n_graphs, n_samples, n_graph_feats, n_in_feats, n_classes, prop_known_sims=1.0, device=None):
-    # making many graphs out of groups of samples
-    X, y = make_classification(n_samples=n_samples*n_graphs, n_features=n_graph_feats + n_in_feats, n_informative=n_graph_feats + n_in_feats, n_redundant=0, n_repeated=0, n_classes=n_classes, random_state=RANDOM_STATE)
-    onehot = OneHotEncoder(sparse=False)
-    onehot.fit(y.reshape(-1,1))
-
-    graph_feats = X[:, :n_graph_feats]
-    feats = X[:, n_graph_feats:]
-    list_of_sample_feats = np.split(feats, n_graphs)
-    list_of_sample_graph_feats = np.split(graph_feats, n_graphs)
-    list_of_sample_classes = np.split(y, n_graphs)
-    intergraph_conns = []
-    graphs = []
-    for i in range(0, len(list_of_sample_feats)):
-        graph = cosine_similarity(list_of_sample_graph_feats[i])
-        graphs.append(graph)
-        class_assignments = list_of_sample_classes[i]
-        oh_class_assignments = onehot.transform(class_assignments.reshape(-1,1))
-        curr_intergraph_block_row = []
-        for other_class_assn in list_of_sample_classes:
-            oh_other_class_assn = onehot.transform(other_class_assn.reshape(-1,1))
-            intergraph = np.matmul(oh_class_assignments, oh_other_class_assn.transpose())
-            subsample_mask = np.random.rand(intergraph.shape[0], intergraph.shape[1]) > prop_known_sims
-            intergraph[subsample_mask] = 1.0/n_classes
-            curr_intergraph_block_row.append(intergraph)
-        intergraph_conns.append(curr_intergraph_block_row)
-            
-
-    train_inds, test_inds = train_test_split(np.arange(0, len(graphs)), random_state=RANDOM_STATE)
-    train_graphs = np.array(graphs)[train_inds]
-    test_graphs =  np.array(graphs)[test_inds]
-    train_feats = np.array(list_of_sample_feats)[train_inds]
-    test_feats = np.array(list_of_sample_feats)[test_inds]
-    train_intergraph_conns = np.array(intergraph_conns)[train_inds, :, :][:, train_inds, :]
-    train_test_intergraph_conns = np.array(intergraph_conns)[train_inds, :, :][:, test_inds, :]
-    test_intergraph_conns = np.array(intergraph_conns)[test_inds, :, :][:, test_inds, :]
-    train_y_list = np.array(list_of_sample_classes)[train_inds]
-    test_y_list = np.array(list_of_sample_classes)[test_inds]
-
-    (train_feats, train_graphs, test_feats, test_graphs, train_intergraph_conns, train_test_intergraph_conns, 
-            test_intergraph_conns, train_y_list, test_y_list) = convert_to_tensor(train_feats, train_graphs, 
-                    test_feats, test_graphs, train_intergraph_conns, train_test_intergraph_conns, 
-                    test_intergraph_conns, train_y_list, test_y_list, device=device)
-    return train_feats, train_graphs, test_feats, test_graphs, train_intergraph_conns, train_test_intergraph_conns, test_intergraph_conns, train_y_list, test_y_list
-
-
-def compute_loss_all_pairs(net, feats_list_1, feats_list_2, graphs_1, graphs_2, intergraphs, loss_fn, train=False):
-    # computes loss between all pairs of graphs 1 and 2
-    # should there be batching for the graphs compared to graph 1?
-    # how about leaving batches as just single pairs for now
-    loss = 0
-    for first_graph_ind in range(0, len(graphs_1)):
-        features_1 = feats_list_1[first_graph_ind]
-        graph_1 = graphs_1[first_graph_ind]
-        for second_graph_ind in range(0, len(graphs_2)):
-            features_2 = feats_list_2[second_graph_ind]
-            graph_2 = graphs_2[second_graph_ind]
-            R_12 = intergraphs[first_graph_ind, second_graph_ind, :, :]
-
-            H_i = net(features_1)
-            H_j = net(features_2)
-            loss += loss_fn(H_i, H_j, graph_1, graph_2, R_12)
-    return loss
-
-
 def train_epoch_clip(net, seqs_list, keywords_list, vocab_size, optimizer, batch_size=64, device=None):
     # computes loss between all pairs of graphs 1 and 2
     # should there be batching for the graphs compared to graph 1?
@@ -118,18 +52,8 @@ def train_epoch_clip(net, seqs_list, keywords_list, vocab_size, optimizer, batch
         all_keyword_embeds.append(keyword_embeds)
 
         curr_batch_size, embed_dim = seq_embeds.size()
-        #similarity = torch.bmm(seq_embeds.view(curr_batch_size, 1, embed_dim), keyword_embeds.view(curr_batch_size, embed_dim, 1)).squeeze()
         similarity = torch.mm(seq_embeds, keyword_embeds.transpose(0,1)).squeeze()
         similarity *= torch.exp(net.temperature)
-        '''
-        numpy_sim = similarity.detach().cpu().numpy()
-        try:
-            assert (numpy_sim >= 0.).all() and (numpy_sim <= 1.).all()
-        except AssertionError:
-            print(numpy_sim[numpy_sim > 1.])
-            print(numpy_sim[numpy_sim < 0.])
-            exit()
-        '''
         labels = torch.arange(start=0, end=similarity.shape[0], dtype=torch.long).to(device)
         loss = (loss_fn(similarity, labels) + loss_fn(similarity.transpose(0,1), labels))/2
 
@@ -140,7 +64,6 @@ def train_epoch_clip(net, seqs_list, keywords_list, vocab_size, optimizer, batch
         total_objective += objective
         
     all_seq_embeds = torch.cat(all_seq_embeds, dim=0).detach().cpu().numpy()
-    #print(all_keyword_embeds[-2].shape, all_keyword_embeds[-1].shape)
     all_keyword_embeds = torch.cat(all_keyword_embeds, dim=0).detach().cpu().numpy()
     ind_keyword_embeds = get_individual_keyword_embeds(net, vocab_size, device)
 
@@ -287,10 +210,6 @@ if __name__ == '__main__':
     np.random.seed(seed=RANDOM_STATE)
     torch.manual_seed(RANDOM_STATE)
     args = arguments()
-
-    #training_features_1, training_features_2, test_features, train_1_graph, train_2_graph, test_graph, y_train_1, y_train_2, y_test, R_12, R_13, R_23 = make_dataset(3*num_nodes, feat_dim, feat_dim, num_classes, prop_known_sims=args.prop_known_sims, device=device)
-
-    #train_feats, train_graphs, test_feats, test_graphs, train_intergraph_conns, train_test_intergraph_conns, test_intergraph_conns, train_y_list, test_y_list = make_multi_graph_dataset(n_graphs, num_nodes, feat_dim, feat_dim, num_classes, prop_known_sims=args.prop_known_sims, device=device)
 
     alpha = args.alpha
 
