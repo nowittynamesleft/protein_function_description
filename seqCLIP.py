@@ -20,11 +20,13 @@ from fasta_loader import load_fasta, seq2onehot
 #from compare_clusters_with_go_sim import align_preds_with_annots, cluster_func_pred, make_cluster_lists_from_cluster_preds
 #from compare_with_brenda_df import compute_brenda_nmi
 from torch.utils.tensorboard import SummaryWriter
-from fasta_loader import collate_padd
+from fasta_loader import collate_pad
 from tqdm import tqdm
 import argparse
-from models import ProtEmbedding, KeywordEmbedding, seqCLIP
+from models import ProtEmbedding, KeywordEmbedding, seqCLIP, LitSeqCLIP
 from losses import cluster_entropy, modmax_loss
+from data import get_data_loader
+from pytorch_lightning import Trainer
 
 RANDOM_STATE = 973
 
@@ -42,7 +44,7 @@ def train_epoch_clip(net, seqs_list, keywords_list, vocab_size, optimizer, batch
         indices = permutation[i:i+batch_size]
         batch_seqs = seqs_list[indices]
 
-        batch_seqs = collate_padd(batch_seqs, device=device)
+        batch_seqs = collate_pad(batch_seqs, device=device)
         batch_keywords = [torch.from_numpy(np.array(keyword_inds)).to(device) for keyword_inds in keywords_list[indices]]
 
         seq_embeds, keyword_embeds = net(batch_seqs, batch_keywords) # keyword_embeds (Nxk) are averaged over all assigned keywords for a protein
@@ -78,7 +80,7 @@ def predict_clip(net, vocab_size, seqs_list, keywords_list, batch_size=64, devic
     for i in tqdm(range(0, len(seqs_list), batch_size)):
         batch_seqs = seqs_list[i:i+batch_size]
 
-        batch_seqs = collate_padd(batch_seqs, device=device)
+        batch_seqs = collate_pad(batch_seqs, device=device)
         batch_keywords = [torch.from_numpy(np.array(keyword_inds)).to(device) for keyword_inds in keywords_list[i:i+batch_size]]
 
         seq_embeds, keyword_embeds = net(batch_seqs, batch_keywords)
@@ -215,7 +217,9 @@ if __name__ == '__main__':
 
     id2seq = load_fasta(args.fasta_fname)
     
+    seq_kw_dataloader, seq_dim, keyword_vocab_size = get_data_loader(args.fasta_fname, args.keyword_file, args.batch_size)
     #one_hot_seqs = np.array([seq2onehot(id2seq[prot]) for prot in id2seq.keys()])
+    '''
     keyword_dict = pickle.load(open(args.keyword_file, 'rb'))
     keyword_df = keyword_dict['keyword_df']
     train_keywords = np.array(keyword_df['keyword_inds'])
@@ -231,6 +235,7 @@ if __name__ == '__main__':
     keyword_vocab_size = len(all_keywords)
     print(keyword_vocab_size)
     embed_dim = args.embed_dim
+    '''
 
 
     save_prefix = args.save_prefix
@@ -238,6 +243,20 @@ if __name__ == '__main__':
     batch_size = args.batch_size
     learning_rate = args.learning_rate
 
+    model = LitSeqCLIP(seq_dim, keyword_vocab_size, args.embed_dim, learning_rate=learning_rate)
+    print('Device of LitSeqCLIP:')
+    print(model.device)
+    trainer = Trainer(gpus=1, max_epochs=args.epochs)
+    trainer.fit(model, seq_kw_dataloader)
+    callback_metrics = trainer.callback_metrics
+    print(callback_metrics)
+    #trained_seq_embeds, trained_individual_keyword_embeds = trainer.predict(model, seq_kw_dataloader)
+    predictions = trainer.predict(model, seq_kw_dataloader)
+    print(predictions)
+    #trained_individual_keyword_embeds = get_individual_keyword_embeds(model, keyword_vocab_size, device=device)
+
+
+    '''
     if args.load_model is not None:
         #net = Conv_NN(seq_dim, num_classes, hidden_dim=args.hidden)
         net = seqCLIP(seq_dim, keyword_vocab_size, embed_dim)
@@ -257,10 +276,11 @@ if __name__ == '__main__':
     else:
         net = seqCLIP(seq_dim, keyword_vocab_size, embed_dim)
         trained_seq_embeds, trained_individual_keyword_embeds, loss_hist = train_clip_model(net, keyword_vocab_size, all_keywords, prot_list, save_prefix, train_seqs, train_keywords, epochs, batch_size, learning_rate, device)
+    '''
 
     outputs = {}
-    outputs['prots'] = np.array(keyword_df['Entry'])
-    outputs['loss_history'] = [loss for loss in loss_hist]
+    outputs['prots'] = np.array(seq_kw_dataloader.dataset.keyword_df['Entry'])
+    outputs['loss_history'] = [loss.item() for loss in callback_metrics['train_loss']]
     outputs['trained_seq_embeddings'] = trained_seq_embeds
     outputs['trained_keyword_embeddings'] = trained_individual_keyword_embeds
     outputs['all_keywords'] = all_keywords

@@ -61,9 +61,9 @@ def onehot2seq(S):
     return seq
 
 
-def collate_padd(batch, device=None, max_len=1000):
+def collate_pad(batch, device=None, max_len=1000):
     """
-    Padds matrices of variable length
+    Pads matrices of variable length
     Takes a batch_size-length list of (protein_length, alphabet_size) numpy arrays and turns it into (batch_size, alphabet_size, length) PyTorch tensors
     Switches the alphabet size and length to interface with pytorch conv1d layer
     """
@@ -74,7 +74,7 @@ def collate_padd(batch, device=None, max_len=1000):
     S_padded = torch.zeros((len(batch), len(CHARS), max_len)).to(device)
     S_padded[:, len(CHARS) - 1, :] = 1 # add "no residue" entries in one-hot matrix
 
-    # padd
+    # pad
     '''
     for i in range(len(batch)):
         S_padded[i][:lengths[i], :] = batch[i][1]

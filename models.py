@@ -1,15 +1,18 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
+import pytorch_lightning as pl
+
 
 class LitSeqCLIP(pl.LightningModule):
 
-    def __init__(self, prot_alphabet_dim, keyword_vocab_size, embed_dim):
+    def __init__(self, prot_alphabet_dim, keyword_vocab_size, embed_dim, learning_rate=0.01):
         super(LitSeqCLIP, self).__init__()
 
         self.prot_alphabet_dim = prot_alphabet_dim
         self.embed_dim = embed_dim
         self.keyword_vocab_size = keyword_vocab_size
+        self.lr = learning_rate
 
         print('prot alphabet size:', prot_alphabet_dim)
         print('vocab size:', keyword_vocab_size)
@@ -19,6 +22,7 @@ class LitSeqCLIP(pl.LightningModule):
         self.keyword_embed = KeywordEmbedding(self.keyword_vocab_size, self.embed_dim)
         self.temperature = nn.Parameter(torch.tensor(0.07))
         self.temperature.requires_grad = True
+        self.loss_fn = nn.CrossEntropyLoss()
 
     def forward(self, x_prot, x_keyword_list):
         x_out_prot = self.prot_embed(x_prot)
@@ -27,8 +31,8 @@ class LitSeqCLIP(pl.LightningModule):
         return x_out_prot, x_out_keyword
 
 
-    def configure_optimizers(self, lr):
-        optimizer = torch.optim.Adam(self.parameters, lr=lr)
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         return optimizer
     
     def training_step(self, train_batch, batch_idx):
@@ -41,11 +45,11 @@ class LitSeqCLIP(pl.LightningModule):
 
         curr_batch_size, embed_dim = seq_embeds.size()
         similarity = torch.mm(seq_embeds, keyword_embeds.transpose(0,1)).squeeze()
-        similarity *= torch.exp(net.temperature)
+        similarity *= torch.exp(self.temperature)
 
-        #labels = torch.arange(start=0, end=similarity.shape[0], dtype=torch.long).to(device)
-        labels = torch.arange(start=0, end=similarity.shape[0], dtype=torch.long)
-        loss = (loss_fn(similarity, labels) + loss_fn(similarity.transpose(0,1), labels))/2
+        labels = torch.arange(start=0, end=similarity.shape[0], dtype=torch.long).to(self.device)
+        #labels = torch.arange(start=0, end=similarity.shape[0], dtype=torch.long)
+        loss = (self.loss_fn(similarity, labels) + self.loss_fn(similarity.transpose(0,1), labels))/2
         self.log('train_loss', loss)
         return {'loss': loss, 'seq_embeds': seq_embeds, 'keyword_embeds': keyword_embeds}
 
@@ -61,11 +65,27 @@ class LitSeqCLIP(pl.LightningModule):
         similarity = torch.mm(seq_embeds, keyword_embeds.transpose(0,1)).squeeze()
         similarity *= torch.exp(net.temperature)
 
-        #labels = torch.arange(start=0, end=similarity.shape[0], dtype=torch.long).to(device)
-        labels = torch.arange(start=0, end=similarity.shape[0], dtype=torch.long)
-        loss = (loss_fn(similarity, labels) + loss_fn(similarity.transpose(0,1), labels))/2
+        labels = torch.arange(start=0, end=similarity.shape[0], dtype=torch.long).to(self.device)
+        #labels = torch.arange(start=0, end=similarity.shape[0], dtype=torch.long)
+        loss = (self.loss_fn(similarity, labels) + self.loss_fn(similarity.transpose(0,1), labels))/2
         self.log('val_loss', loss)
-        
+
+    def predict_step(self, pred_batch, batch_idx):
+        batch_seqs, _ = pred_batch
+
+        seq_embeds = self.prot_embed(batch_seqs)
+
+        # get only individual keyword embeddings for predict step
+        total_keyword_embeds = []
+        for i in range(0, self.keyword_vocab_size):
+            ind = torch.tensor(i, dtype=torch.long).unsqueeze(0).to(self.device)
+            keyword_embed = self.keyword_embed([ind])
+            keyword_embeds = nn.functional.normalize(keyword_embed)
+            total_keyword_embeds.append(keyword_embeds)
+        keyword_embeds = torch.cat(total_keyword_embeds, dim=0)
+        seq_embeds = nn.functional.normalize(seq_embeds)
+
+        return seq_embeds, keyword_embeds
 
 
 class ProtEmbedding(nn.Module):
