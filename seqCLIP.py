@@ -27,8 +27,17 @@ from models import ProtEmbedding, KeywordEmbedding, seqCLIP, LitSeqCLIP
 from losses import cluster_entropy, modmax_loss
 from data import get_data_loader
 from pytorch_lightning import Trainer
+from pytorch_lightning import Callback
 
 RANDOM_STATE = 973
+
+class MetricsCallback(Callback):
+    def __init__(self):
+        super().__init__()
+        self.metrics = []
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        self.metrics.append(trainer.callback_metrics)
 
 def train_epoch_clip(net, seqs_list, keywords_list, vocab_size, optimizer, batch_size=64, device=None):
     # computes loss between all pairs of graphs 1 and 2
@@ -246,13 +255,13 @@ if __name__ == '__main__':
     model = LitSeqCLIP(seq_dim, keyword_vocab_size, args.embed_dim, learning_rate=learning_rate)
     print('Device of LitSeqCLIP:')
     print(model.device)
-    trainer = Trainer(gpus=1, max_epochs=args.epochs)
+    metric_callback = MetricsCallback()
+    trainer = Trainer(gpus=1, max_epochs=args.epochs, callbacks=metric_callback)
     trainer.fit(model, seq_kw_dataloader)
-    callback_metrics = trainer.callback_metrics
-    print(callback_metrics)
+    logged_metrics = metric_callback.metrics
+    print(logged_metrics)
     #trained_seq_embeds, trained_individual_keyword_embeds = trainer.predict(model, seq_kw_dataloader)
-    predictions = trainer.predict(model, seq_kw_dataloader)
-    print(predictions)
+    predictions = trainer.predict(model, seq_kw_dataloader)[0]
     #trained_individual_keyword_embeds = get_individual_keyword_embeds(model, keyword_vocab_size, device=device)
 
 
@@ -280,10 +289,10 @@ if __name__ == '__main__':
 
     outputs = {}
     outputs['prots'] = np.array(seq_kw_dataloader.dataset.keyword_df['Entry'])
-    outputs['loss_history'] = [loss.item() for loss in callback_metrics['train_loss']]
-    outputs['trained_seq_embeddings'] = trained_seq_embeds
-    outputs['trained_keyword_embeddings'] = trained_individual_keyword_embeds
-    outputs['all_keywords'] = all_keywords
+    outputs['loss_history'] = [metrics['train_loss_epoch'].item() for metrics in logged_metrics]
+    outputs['trained_seq_embeddings'] = predictions[0]
+    outputs['trained_keyword_embeddings'] = predictions[1]
+    #outputs['all_keywords'] = all_keywords
 
 
     pickle.dump(outputs, open(save_prefix + '_trained_embeddings.pckl', 'wb'))

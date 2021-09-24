@@ -35,6 +35,7 @@ class LitSeqCLIP(pl.LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         return optimizer
     
+
     def training_step(self, train_batch, batch_idx):
         batch_seqs, batch_keywords = train_batch
 
@@ -50,7 +51,7 @@ class LitSeqCLIP(pl.LightningModule):
         labels = torch.arange(start=0, end=similarity.shape[0], dtype=torch.long).to(self.device)
         #labels = torch.arange(start=0, end=similarity.shape[0], dtype=torch.long)
         loss = (self.loss_fn(similarity, labels) + self.loss_fn(similarity.transpose(0,1), labels))/2
-        self.log('train_loss', loss)
+        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
         return {'loss': loss, 'seq_embeds': seq_embeds, 'keyword_embeds': keyword_embeds}
 
     def validation_step(self, val_batch, batch_idx):
@@ -68,7 +69,7 @@ class LitSeqCLIP(pl.LightningModule):
         labels = torch.arange(start=0, end=similarity.shape[0], dtype=torch.long).to(self.device)
         #labels = torch.arange(start=0, end=similarity.shape[0], dtype=torch.long)
         loss = (self.loss_fn(similarity, labels) + self.loss_fn(similarity.transpose(0,1), labels))/2
-        self.log('val_loss', loss)
+        self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
     def predict_step(self, pred_batch, batch_idx):
         batch_seqs, _ = pred_batch
