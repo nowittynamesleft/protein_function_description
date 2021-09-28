@@ -165,3 +165,49 @@ class seqCLIP(nn.Module):
         x_out_keyword = self.keyword_embed(x_keyword_list)
 
         return x_out_prot, x_out_keyword
+
+
+class PretrainedProtBERTClassifier(nn.Module):
+    def __init__(self, pretrained_model, output_dim, freeze_pretrained=False, freeze_partial=False):
+        super(PretrainedProtBERTClassifier, self).__init__()
+        self.classification_layer = nn.Linear(pretrained_model.layers[-1].embed_dim, output_dim)
+        self.pretrained_model = pretrained_model
+        self.freeze_pretrained = freeze_pretrained
+        if freeze_partial:
+            for name, param in self.pretrained_model.named_parameters():
+                if 'norm' in name:
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+        '''
+        for name, param in self.named_parameters(): 
+            if param.requires_grad:
+                print(name)
+        '''
+    def forward(self, x):
+        repr_layer = 5 # layer to extract representations from
+        if self.freeze_pretrained:
+            with torch.no_grad():
+                rep = self.pretrained_model(x, repr_layers=[repr_layer])['representations'][repr_layer]
+        else:
+            rep = self.pretrained_model(x, repr_layers=[repr_layer])['representations'][repr_layer]
+        #max_representations, inds = torch.max(rep, 1) # global max pool the pretrained token representations
+        linear = self.classification_layer(max_representations)
+        preds = torch.sigmoid(linear)
+        return preds
+
+
+class NMTDescriptionGen(nn.Module):
+    def __init__(self, prot_alphabet_dim, keyword_vocab_size, embed_dim):
+        super(NMTDescriptionGen, self).__init__()
+
+        self.prot_alphabet_dim = prot_alphabet_dim
+        self.embed_dim = embed_dim
+        self.keyword_vocab_size = keyword_vocab_size
+
+        print('prot alphabet size:', prot_alphabet_dim)
+        print('vocab size:', keyword_vocab_size)
+        print('embed dim:', embed_dim)
+
+        self.prot_embed = ProtEmbedding(self.prot_alphabet_dim, self.embed_dim, hidden_dim=100)
+        
