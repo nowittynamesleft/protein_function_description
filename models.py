@@ -173,28 +173,72 @@ class PretrainedProtBERTClassifier(nn.Module):
         self.classification_layer = nn.Linear(pretrained_model.layers[-1].embed_dim, output_dim)
         self.pretrained_model = pretrained_model
         self.freeze_pretrained = freeze_pretrained
+        self.length_transform = LengthConverter()
         if freeze_partial:
             for name, param in self.pretrained_model.named_parameters():
                 if 'norm' in name:
                     param.requires_grad = True
                 else:
                     param.requires_grad = False
-        '''
-        for name, param in self.named_parameters(): 
-            if param.requires_grad:
-                print(name)
-        '''
-    def forward(self, x):
+
+    def forward(self, x, seq_masks):
         repr_layer = 5 # layer to extract representations from
         if self.freeze_pretrained:
             with torch.no_grad():
                 rep = self.pretrained_model(x, repr_layers=[repr_layer])['representations'][repr_layer]
         else:
             rep = self.pretrained_model(x, repr_layers=[repr_layer])['representations'][repr_layer]
-        #max_representations, inds = torch.max(rep, 1) # global max pool the pretrained token representations
-        linear = self.classification_layer(max_representations)
-        preds = torch.sigmoid(linear)
-        return preds
+
+        target_lens = 1000*torch.ones(rep.shape[0])
+        embeddings = self.length_transform(rep, target_lens, seq_masks)
+        return embeddings
+
+
+class LengthConverter(nn.Module):
+    """
+    Implementation of Length Transformation. From Shu et al 2019
+    """
+
+    def __init__(self):
+        super(LengthConverter, self).__init__()
+        self.sigma = nn.Parameter(torch.tensor(1., dtype=torch.float))
+
+    def forward(self, z, ls, z_mask):
+        """
+        Adjust the number of vectors in `z` according to `ls`.
+        Return the new `z` and its mask.
+        Args:
+            z - latent variables, shape: B x L_x x hidden
+            ls - target lengths, shape: B
+            z_mask - latent mask, shape: B x L_x
+        """
+        n = z_mask.sum(1)
+        arange_l = torch.arange(ls.max().long())
+        arange_z = torch.arange(z.size(1))
+        if torch.cuda.is_available():
+            arange_l = arange_l.cuda()
+            arange_z = arange_z.cuda()
+        arange_l = arange_l[None, :].repeat(z.size(0), 1).float()
+        mu = arange_l * n[:, None].float() / ls[:, None].float()
+        arange_z = arange_z[None, None, :].repeat(z.size(0), ls.max().long(), 1).float()
+        if OPTS.fp16:
+            arange_l = arange_l.half()
+            mu = mu.half()
+            arange_z = arange_z.half()
+        if OPTS.fixbug1:
+            logits = - torch.pow(arange_z - mu[:, :, None], 2) / (2. * self.sigma ** 2)
+        else:
+            distance = torch.clamp(arange_z - mu[:, :, None], -100, 100)
+            logits = - torch.pow(2, distance) / (2. * self.sigma ** 2)
+        logits = logits * z_mask[:, None, :] - 99. * (1 - z_mask[:, None, :])
+        weight = torch.softmax(logits, 2)
+        z_prime = (z[:, None, :, :] * weight[:, :, :, None]).sum(2)
+        if OPTS.fp16:
+            z_prime_mask = (arange_l < ls[:, None].half()).half()
+        else:
+            z_prime_mask = (arange_l < ls[:, None].float()).float()
+        z_prime = z_prime * z_prime_mask[:, :, None]
+        return z_prime, z_prime_mask
 
 
 class NMTDescriptionGen(nn.Module):
