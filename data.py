@@ -18,9 +18,9 @@ class SequenceGODataset(Dataset):
     select 64 GO terms and sample num_samples sequences for each GO term,
     returning the chosen sequences and descriptions for each GO term
     """
-    def __init__(self, fasta_fname, keyword_file, num_samples):
+    def __init__(self, fasta_fname, go_file, num_samples):
         id2seq = load_fasta(fasta_fname)
-        go_dict = pickle.load(open(keyword_file, 'rb'))
+        go_dict = pickle.load(open(go_file, 'rb'))
         self.annot_mat = np.array(go_dict['annot_mat'])
         self.go_terms = np.array(go_dict['go_terms'])
         self.go_descriptions = np.array(go_dict['go_descriptions'])
@@ -55,25 +55,12 @@ class SequenceKeywordDataset(Dataset):
         return len(self.prot_list)
 
 
-class SequenceSetGODataset(Dataset):
-    def __init__(self, fasta_fname, go_term_file):
-        id2seq = load_fasta(fasta_fname)
-        self.seqs = np.array([seq2onehot(id2seq[prot]) for prot in self.keyword_df['Entry']])
-        self.all_keywords = self.keyword_dict['all_keywords']
-        self.prot_list = self.keyword_df['Entry'].tolist()
-
-    def __getitem__(self, index):
-        return (self.seqs[index], self.keywords[index])
-
-    def __len__(self):
-        return len(self.prot_list)
-
-
 def previous_seq_kw_collate_pad(batch, device=None, max_len=1000):
     """
     Pads matrices of variable length
-    Takes a batch_size-length list of (protein_length, alphabet_size) numpy arrays and turns it into (batch_size, alphabet_size, length) PyTorch tensors
-    Switches the alphabet size and length to interface with pytorch conv1d layer
+    Takes a batch_size-length list of (protein_length, alphabet_size) 
+    numpy arrays and turns it into (batch_size, alphabet_size, length) PyTorch tensors.
+    Switches the alphabet size and length to interface with pytorch conv1d layer.
     """
     # get sequence lengths
     #lengths = torch.tensor([t[0].shape[0] for t in batch]).to(device)
@@ -97,8 +84,9 @@ def previous_seq_kw_collate_pad(batch, device=None, max_len=1000):
 def seq_kw_collate_pad(batch, max_len=1000):
     """
     Pads matrices of variable length
-    Takes a batch_size-length list of (protein_length, alphabet_size) numpy arrays and turns it into (batch_size, alphabet_size, length) PyTorch tensors
-    Switches the alphabet size and length to interface with pytorch conv1d layer
+    Takes a batch_size-length list of (protein_length, alphabet_size) numpy arrays and 
+    turns it into (batch_size, alphabet_size, length) PyTorch tensors.
+    Switches the alphabet size and length to interface with pytorch conv1d layer.
     """
     # get sequence lengths
     #lengths = torch.tensor([t[0].shape[0] for t in batch]).to(device)
@@ -132,7 +120,8 @@ def get_data_loader(fasta_fname, keyword_file, batch_size, device=None):
     keyword_vocab_size = len(seq_key_dataset.all_keywords)
     print(keyword_vocab_size)
 
-    seq_kw_dataloader = DataLoader(seq_key_dataset, batch_size=batch_size, shuffle=True, collate_fn=seq_kw_collate_pad)
+    seq_kw_dataloader = DataLoader(seq_key_dataset, batch_size=batch_size, 
+            shuffle=True, collate_fn=seq_kw_collate_pad)
     return seq_kw_dataloader, seq_dim, keyword_vocab_size
 
 # TODO: make data loader for length-transform code
