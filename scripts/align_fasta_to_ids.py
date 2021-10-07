@@ -25,7 +25,7 @@ if __name__ == '__main__':
 
     query2seq = dict()
     for header, sequence in iterator:
-        identifier = header.lstrip(">").split(" ")[0]
+        identifier = header.lstrip(">").split(" ")[0].split('|')[1]
         if identifier in queries:
             queries.remove(identifier)
             query2seq[identifier] = sequence
