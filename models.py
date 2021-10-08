@@ -3,6 +3,8 @@ import torch.nn.functional as F
 from torch import nn
 import pytorch_lightning as pl
 
+from layers import EncoderBlock, PositionalEncoding
+
 
 class LitSeqCLIP(pl.LightningModule):
 
@@ -34,7 +36,7 @@ class LitSeqCLIP(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         return optimizer
-    
+
 
     def training_step(self, train_batch, batch_idx):
         batch_seqs, batch_keywords = train_batch
@@ -112,7 +114,7 @@ class ProtEmbedding(nn.Module):
         x_out = self.linear(x)
 
         return x_out
-    
+
 
 class KeywordEmbedding(nn.Module):
 
@@ -201,7 +203,7 @@ class LengthConverter(nn.Module):
 
     def __init__(self):
         super(LengthConverter, self).__init__()
-        self.sigma = nn.Parameter(torch.tensor(1., dtype=torch.float))
+        self.sigma = nn.Parameter(torch.tensor(1., dtype=torch.float), requires_grad=True)
 
     def forward(self, z, ls, z_mask):
         """
@@ -232,19 +234,23 @@ class LengthConverter(nn.Module):
             distance = torch.clamp(arange_z - mu[:, :, None], -100, 100)
             logits = - torch.pow(2, distance) / (2. * self.sigma ** 2)
         '''
-        logits = logits * z_mask[:, None, :] - 99. * (1 - z_mask[:, None, :])
+        logits = logits * z_mask[:, None, :] - 999. * (1 - z_mask[:, None, :])
         weight = torch.softmax(logits, 2)
-        z_prime = (z[:, None, :, :] * weight[:, :, :, None]).sum(2) # use torch.multiply instead, to do dot product between two matrices
+        # z_prime = (z[:, None, :, :] * weight[:, :, :, None]).sum(2) # use torch.multiply instead, to do dot product between two matrices
+        z_prime = torch.matmul(weight, z)
+        """
         if OPTS.fp16:
             z_prime_mask = (arange_l < ls[:, None].half()).half()
         else:
             z_prime_mask = (arange_l < ls[:, None].float()).float()
+        """
+        z_prime_mask = (arange_l < ls[:, None].float()).float()
         z_prime = z_prime * z_prime_mask[:, :, None]
         return z_prime, z_prime_mask
 
 
 class NMTDescriptionGen(nn.Module):
-    def __init__(self, prot_alphabet_dim, keyword_vocab_size, embed_dim):
+    def __init__(self, prot_alphabet_dim, keyword_vocab_size, embed_dim, num_heads=8, dim_feedforward=512), max_len=1000):
         super(NMTDescriptionGen, self).__init__()
 
         self.prot_alphabet_dim = prot_alphabet_dim
@@ -255,5 +261,33 @@ class NMTDescriptionGen(nn.Module):
         print('vocab size:', keyword_vocab_size)
         print('embed dim:', embed_dim)
 
+        # pre-trained model
+        # assumes block of: Embedding + Positinoal Encoding + Self-Attention
         self.prot_embed = ProtEmbedding(self.prot_alphabet_dim, self.embed_dim, hidden_dim=100)
-        
+
+        # pos encoding
+        self.pos_encoding = PositionalEncoding(embed_dim, max_len=max_len)
+
+        # len  transform
+        self.len_convert = LengthConverter()
+
+        # decoder
+        self.decoder = EncoderBlock(embed_dim, num_heads, dim_feedforward)
+
+    def _max_lens(self, x_mask):
+        ls = torch.max(torch.sum(x_mask.float(), dim=1))*torch.ones(x_mask.shape[0])
+        return ls
+
+    def forward(self, x, x_mask):
+        # x: Tensor: [seq_set, L]
+        # x_mask: Tensor: [seq_set, L]
+
+        embed = self.prot_embed(x, x_mask)  # Tensor: [seq_set, L, embed_dim]
+
+        embed = self.len_convert(embed, self._max_lens(x_mask), x_mask) # ls: Tensor: []
+        avg_embed = torch.mean(embed, dim=0)
+        avg_embed = self.pos_encoding(avg_embed) # Tensor: [1, L_max, embed_dim]
+
+        out = self.decode(avg_embed)
+
+        return out
