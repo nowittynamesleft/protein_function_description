@@ -11,3 +11,5 @@ S_padded, batch_go_descs = batch
 print(S_padded)
 print("GO descriptions")
 print(batch_go_descs)
+
+
