@@ -44,18 +44,23 @@ class MultiheadAttention(nn.Module):
 
 
     def forward(self, x, mask=None, return_attention=False):
-        batch_size, seq_length, embed_dim = x.size()
+        #batch_size, seq_length, embed_dim = x.size()
+        seq_length, embed_dim = x.size()
         qkv = self.qkv_proj(x)
 
         # Separate Q, K, V from linear output
-        qkv = qkv.reshape(batch_size, seq_length, self.num_heads, 3*self.head_dim)
-        qkv = qkv.permute(0, 2, 1, 3)  # [Batch, Head, SeqLen, Dims]
+        #qkv = qkv.reshape(batch_size, seq_length, self.num_heads, 3*self.head_dim)
+        #qkv = qkv.permute(0, 2, 1, 3)  # [Batch, Head, SeqLen, Dims]
+        qkv = qkv.reshape(seq_length, self.num_heads, 3*self.head_dim)
+        qkv = qkv.permute(1, 0, 2)  # [Head, SeqLen, Dims]
         q, k, v = qkv.chunk(3, dim=-1)
 
         # Determine value outputs
         values, attention = scaled_dot_product(q, k, v, mask=mask)
-        values = values.permute(0, 2, 1, 3)  # [Batch, SeqLen, Head, Dims]
-        values = values.reshape(batch_size, seq_length, embed_dim)
+        #values = values.permute(0, 2, 1, 3)  # [Batch, SeqLen, Head, Dims]
+        #values = values.reshape(batch_size, seq_length, embed_dim)
+        values = values.permute(1, 0, 2)  # [SeqLen, Head, Dims]
+        values = values.reshape(seq_length, embed_dim)
         o = self.o_proj(values)
 
         if return_attention:
@@ -144,7 +149,7 @@ class PositionalEncoding(nn.Module):
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)
+        #pe = pe.unsqueeze(0) # Why?
 
         # register_buffer => Tensor which is not a parameter, but should be part of the modules state.
         # Used for tensors that need to be on the same device as the module.
@@ -152,7 +157,10 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe, persistent=False)
 
     def forward(self, x):
-        x = x + self.pe[:, :x.size(1)]
+        print(x.shape)
+        print(self.pe.shape)
+        #x = x + self.pe[:, :x.size(1)]
+        x = x + self.pe[:x.size(0), :]
 
         return x
 

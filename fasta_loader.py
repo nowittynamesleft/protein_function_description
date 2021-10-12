@@ -54,6 +54,23 @@ def seq2onehot(seq, sub=None):
     return seqs_x
 
 
+def seq2AAinds(seq, sub=None):
+    """ Create indices embedding """
+    vocab_size = len(CHARS)
+    vocab_embed = dict(zip(CHARS, range(vocab_size)))
+
+    # Convert vocab to one-hot
+    if sub is None:
+        extract = lambda x: vocab_embed[x] 
+    else:
+        extract = lambda x: vocab_embed.get(x, None) or vocab_embed[sub]
+
+    vocab_one_hot = np.eye(vocab_size)
+    embed_x = np.array([extract(v) for v in seq])
+
+    return embed_x
+
+
 def onehot2seq(S):
     chars = np.asarray(CHARS)
     rind = np.argmax(np.exp(S[0]), 1)

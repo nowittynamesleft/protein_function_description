@@ -4,7 +4,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split, Dataset
 import pytorch_lightning as pl
-from fasta_loader import load_fasta, seq2onehot
+from fasta_loader import load_fasta, seq2onehot, seq2AAinds
 import pickle
 import numpy as np
 from torchtext.data.utils import get_tokenizer
@@ -43,7 +43,9 @@ class SequenceGODataset(Dataset):
         self.go_descriptions = one_hot_docs
         
         self.prot_list = go_dict['prot_ids']
-        self.seqs = np.array([seq2onehot(id2seq[prot]) for prot in self.prot_list], dtype=object)
+        #self.seqs = np.array([seq2onehot(id2seq[prot]) for prot in self.prot_list], dtype=object)
+        self.seqs = np.array([seq2AAinds(id2seq[prot]) for prot in self.prot_list], dtype=object)
+        self.alphabet = CHARS
         self.num_samples = num_samples
         self.collate_fn = partial(seq_go_collate_pad, seq_set_size=self.num_samples, vocab_size=len(self.vocab))
 
@@ -65,42 +67,45 @@ def seq_go_collate_pad(batch, seq_set_size=None, vocab_size=None, device=None):
     Switches the alphabet size and length to interface with pytorch conv1d layer.
     """
     # TODO: decide whether the data will be one hot already or sequences...
-    # if it's one hot already, is that most efficient? probably. already is from the dataset class
-    # get sequence lengths
+    # No, it should be indices and not one hot so that the embedding layer can handle it easier
+    # get sequence lengths and pad them
     # lengths = torch.tensor([t[0].shape[0] for t in batch]).to(device)
     lengths = []
     go_desc_lengths = []
-    for seq_set, go_term_desc in batch:
+    for i, (seq_set, go_term_desc) in enumerate(batch):
         go_desc_lengths.append(len(go_term_desc))
         lengths.append([])
-        for seq in seq_set:
+        for j, seq in enumerate(seq_set):
             lengths[-1].append(len(seq))
     lengths = torch.tensor(lengths)
-    print('Hello world')
     print(lengths)
     max_len = torch.max(lengths)
     print(max_len)
+    S_mask = torch.zeros((len(batch), seq_set_size, max_len))
+    for i in range(len(batch)):
+        for j in range(len(seq_set)):
+            S_mask[i, j, :lengths[i][j]] = 1
     max_go_desc_length = max(go_desc_lengths)
 
-    S_padded = torch.zeros((len(batch), seq_set_size, len(CHARS), max_len))
-    S_padded[:, :seq_set_size, len(CHARS) - 1, :] = 1 # add "no residue" entries in one-hot matrix
+    S_padded = torch.zeros((len(batch), seq_set_size, max_len))
+    S_padded[:, :seq_set_size, :] = len(CHARS) # add "no residue" entries in one-hot matrix
+    
 
     GO_padded = torch.zeros((len(batch), vocab_size, max_go_desc_length))
-    GO_padded[:, vocab_size - 1, :] = 1 # add "no residue" entries in one-hot matrix
+    GO_padded[:, vocab_size - 1, :] = 1
     # pad
     for i in range(len(batch)):
         (seq_set, _) = batch[i]
         for j in range(len(seq_set)):
             seq = seq_set[j]
             if max_len >= lengths[i, j]:
-                S_padded[i, j][:, :lengths[i, j]] = torch.from_numpy(seq.transpose())
+                S_padded[i, j][:lengths[i, j]] = torch.from_numpy(seq.transpose())
             else:
-                S_padded[i, j][:, :max_len] = torch.from_numpy(seq[:max_len, :].transpose())
+                S_padded[i, j][:max_len] = torch.from_numpy(seq[:max_len, :].transpose())
         
-
     # handle GO descriptions. Pad max length of the GO description?
     batch_go_descs = [torch.from_numpy(np.array(go_desc)) for (_, go_desc) in batch]
-    return S_padded, batch_go_descs
+    return S_padded, S_mask, batch_go_descs
 
 
 class SequenceKeywordDataset(Dataset):

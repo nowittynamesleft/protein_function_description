@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 import pytorch_lightning as pl
+from layers import MultiheadAttention, EncoderBlock, TransformerEncoder, PositionalEncoding
 
 from layers import EncoderBlock, PositionalEncoding
 
@@ -116,6 +117,31 @@ class ProtEmbedding(nn.Module):
         return x_out
 
 
+class TransformerProtEmbedding(nn.Module):
+
+    def __init__(self, input_dim, output_dim, hidden_dim=0):
+        super(ProtEmbedding, self).__init__()
+
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+
+        print('input dim:', input_dim)
+        print('output dim:', output_dim)
+
+        self.conv_layer_1 = nn.Conv1d(self.input_dim, self.hidden_dim, 5)
+        self.conv_layer_2 = nn.Conv1d(self.hidden_dim, self.hidden_dim, 5)
+        self.linear = nn.Linear(self.hidden_dim, self.output_dim)
+
+    def forward(self, x_in):
+        x = F.relu(self.conv_layer_1(x_in))
+        x = F.relu(self.conv_layer_2(x))
+        x, _ = torch.max(x, -1)
+        x_out = self.linear(x)
+
+        return x_out
+
+
 class KeywordEmbedding(nn.Module):
 
     def __init__(self, input_dim, output_dim, hidden_dim=100):
@@ -172,7 +198,6 @@ class seqCLIP(nn.Module):
 class PretrainedProtBERTClassifier(nn.Module):
     def __init__(self, pretrained_model, output_dim, freeze_pretrained=False, freeze_partial=False):
         super(PretrainedProtBERTClassifier, self).__init__()
-        self.classification_layer = nn.Linear(pretrained_model.layers[-1].embed_dim, output_dim)
         self.pretrained_model = pretrained_model
         self.freeze_pretrained = freeze_pretrained
         self.length_transform = LengthConverter()
@@ -223,6 +248,10 @@ class LengthConverter(nn.Module):
         arange_l = arange_l[None, :].repeat(z.size(0), 1).float()
         mu = arange_l * n[:, None].float() / ls[:, None].float()
         arange_z = arange_z[None, None, :].repeat(z.size(0), ls.max().long(), 1).float()
+
+        # assuming else statement..
+        distance = torch.clamp(arange_z - mu[:, :, None], -100, 100)
+        logits = - torch.pow(2, distance) / (2. * self.sigma ** 2)
         '''
         if OPTS.fp16:
             arange_l = arange_l.half()
@@ -250,25 +279,26 @@ class LengthConverter(nn.Module):
 
 
 class NMTDescriptionGen(nn.Module):
-    def __init__(self, prot_alphabet_dim, keyword_vocab_size, embed_dim, num_heads=8, dim_feedforward=512), max_len=1000):
+    def __init__(self, prot_alphabet_dim, vocab_size, embed_dim, num_heads=8, dim_feedforward=512, max_len=1000):
         super(NMTDescriptionGen, self).__init__()
 
         self.prot_alphabet_dim = prot_alphabet_dim
         self.embed_dim = embed_dim
-        self.keyword_vocab_size = keyword_vocab_size
+        self.vocab_size = vocab_size
 
         print('prot alphabet size:', prot_alphabet_dim)
-        print('vocab size:', keyword_vocab_size)
+        print('vocab size:', vocab_size)
         print('embed dim:', embed_dim)
 
         # pre-trained model
         # assumes block of: Embedding + Positinoal Encoding + Self-Attention
-        self.prot_embed = ProtEmbedding(self.prot_alphabet_dim, self.embed_dim, hidden_dim=100)
+        self.embedding_layer = nn.Embedding(self.prot_alphabet_dim + 1, embed_dim)
+        self.prot_embed = EncoderBlock(embed_dim, num_heads, dim_feedforward)
 
         # pos encoding
         self.pos_encoding = PositionalEncoding(embed_dim, max_len=max_len)
 
-        # len  transform
+        # len transform
         self.len_convert = LengthConverter()
 
         # decoder
@@ -281,13 +311,26 @@ class NMTDescriptionGen(nn.Module):
     def forward(self, x, x_mask):
         # x: Tensor: [seq_set, L]
         # x_mask: Tensor: [seq_set, L]
+        print(x.shape)
+        #x = torch.transpose(x, 1, 2)
+        #print(x.shape)
+        embed = torch.zeros(x.shape[0], x.shape[1], x.shape[2], self.embed_dim)
+        for i in range(x.shape[0]):
+            for j in range(x.shape[1]):
+                print('Sample ' + str(j) + ' of set ' + str(i))
+                print(x[i, j, :].shape)
+                embed[i, j, ...] = self.embedding_layer(x[i, j, :].type(torch.long))
+                embed[i, j, ...] = self.prot_embed(embed[i, j, ...], x_mask[i, j, :])  # Tensor: [seq_set, L, embed_dim]
+        embed_len_trans = []
+        for i in range(x.shape[0]):
+            curr_sample_embed = embed[i, ...]
+            curr_sample_max_len = int(torch.max(torch.sum(x_mask[i, ...], dim=1)).item())
+            print(curr_sample_max_len)
+            embed_len_trans.append(torch.zeros((curr_sample_embed.shape[0], curr_sample_max_len, curr_sample_embed.shape[2])))
+            embed_len_trans[-1] = self.len_convert(embed[i, ...], self._max_lens(x_mask[i, ...]), x_mask[i, ...]) # ls: Tensor: []
+        avg_embed = [torch.mean(embed[0], dim=0) for embed in embed_len_trans]
+        pos_encode_embed = [self.pos_encoding(embed) for embed in avg_embed] # Tensor: [1, L_max, embed_dim]
 
-        embed = self.prot_embed(x, x_mask)  # Tensor: [seq_set, L, embed_dim]
-
-        embed = self.len_convert(embed, self._max_lens(x_mask), x_mask) # ls: Tensor: []
-        avg_embed = torch.mean(embed, dim=0)
-        avg_embed = self.pos_encoding(avg_embed) # Tensor: [1, L_max, embed_dim]
-
-        out = self.decode(avg_embed)
+        out = [self.decoder(embed) for embed in pos_encode_embed]
 
         return out
