@@ -2,9 +2,9 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 import pytorch_lightning as pl
-from layers import MultiheadAttention, EncoderBlock, TransformerEncoder, PositionalEncoding
-
-from layers import EncoderBlock, PositionalEncoding
+from layers import MultiheadAttention, EncoderBlock, DecoderBlock, PositionalEncoding
+from torch.nn import (TransformerEncoder, TransformerDecoder,
+                      TransformerEncoderLayer, TransformerDecoderLayer)
 
 
 class LitSeqCLIP(pl.LightningModule):
@@ -242,9 +242,11 @@ class LengthConverter(nn.Module):
         n = z_mask.sum(1)
         arange_l = torch.arange(ls.max().long())
         arange_z = torch.arange(z.size(1))
+        '''
         if torch.cuda.is_available():
             arange_l = arange_l.cuda()
             arange_z = arange_z.cuda()
+        '''
         arange_l = arange_l[None, :].repeat(z.size(0), 1).float()
         mu = arange_l * n[:, None].float() / ls[:, None].float()
         arange_z = arange_z[None, None, :].repeat(z.size(0), ls.max().long(), 1).float()
@@ -278,7 +280,7 @@ class LengthConverter(nn.Module):
         return z_prime, z_prime_mask
 
 
-class NMTDescriptionGen(nn.Module):
+class NMTDescriptionGen(pl.LightningModule):
     def __init__(self, prot_alphabet_dim, vocab_size, embed_dim, num_heads=8, dim_feedforward=512, max_len=1000):
         super(NMTDescriptionGen, self).__init__()
 
@@ -291,7 +293,7 @@ class NMTDescriptionGen(nn.Module):
         print('embed dim:', embed_dim)
 
         # pre-trained model
-        # assumes block of: Embedding + Positinoal Encoding + Self-Attention
+        # assumes block of: Embedding + Positional Encoding + Self-Attention
         self.embedding_layer = nn.Embedding(self.prot_alphabet_dim + 1, embed_dim)
         self.prot_embed = EncoderBlock(embed_dim, num_heads, dim_feedforward)
 
@@ -308,7 +310,7 @@ class NMTDescriptionGen(nn.Module):
         ls = torch.max(torch.sum(x_mask.float(), dim=1))*torch.ones(x_mask.shape[0])
         return ls
 
-    def forward(self, x, x_mask):
+    def forward(self, x, x_mask, go_term_descs, desc_mask):
         # x: Tensor: [seq_set, L]
         # x_mask: Tensor: [seq_set, L]
         print(x.shape)
@@ -320,7 +322,8 @@ class NMTDescriptionGen(nn.Module):
                 print('Sample ' + str(j) + ' of set ' + str(i))
                 print(x[i, j, :].shape)
                 embed[i, j, ...] = self.embedding_layer(x[i, j, :].type(torch.long))
-                embed[i, j, ...] = self.prot_embed(embed[i, j, ...], x_mask[i, j, :])  # Tensor: [seq_set, L, embed_dim]
+                pos_encode_embed = self.pos_encoding(embed[i, j, ...]) # Tensor: [1, L_max, embed_dim]
+                embed[i, j, ...] = self.prot_embed(pos_encode_embed, x_mask[i, j, :])  # Tensor: [seq_set, L, embed_dim]
         embed_len_trans = []
         for i in range(x.shape[0]):
             curr_sample_embed = embed[i, ...]
@@ -329,8 +332,11 @@ class NMTDescriptionGen(nn.Module):
             embed_len_trans.append(torch.zeros((curr_sample_embed.shape[0], curr_sample_max_len, curr_sample_embed.shape[2])))
             embed_len_trans[-1] = self.len_convert(embed[i, ...], self._max_lens(x_mask[i, ...]), x_mask[i, ...]) # ls: Tensor: []
         avg_embed = [torch.mean(embed[0], dim=0) for embed in embed_len_trans]
-        pos_encode_embed = [self.pos_encoding(embed) for embed in avg_embed] # Tensor: [1, L_max, embed_dim]
 
-        out = [self.decoder(embed) for embed in pos_encode_embed]
+        print('Right before decode')
+        out = [self.decoder(embed) for embed in avg_embed]
 
         return out
+
+
+
