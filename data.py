@@ -36,18 +36,20 @@ class SequenceGODataset(Dataset):
         word_to_id = {token: idx for idx, token in enumerate(self.vocab)}
         token_ids = [[word_to_id[token] for token in tokens_doc] for tokens_doc in tokenized]
         print(token_ids)
+        '''
         one_hot_docs = [np.zeros((len(doc), len(self.vocab))) for doc in token_ids]
         for i, doc in enumerate(token_ids):
             for token_id in enumerate(doc):
                 one_hot_docs[i][token_id] = 1
-        self.go_descriptions = one_hot_docs
+        '''
+        self.go_descriptions = token_ids
         
         self.prot_list = go_dict['prot_ids']
         #self.seqs = np.array([seq2onehot(id2seq[prot]) for prot in self.prot_list], dtype=object)
         self.seqs = np.array([seq2AAinds(id2seq[prot]) for prot in self.prot_list], dtype=object)
         self.alphabet = CHARS
         self.num_samples = num_samples
-        self.collate_fn = partial(seq_go_collate_pad, seq_set_size=self.num_samples, vocab_size=len(self.vocab))
+        self.collate_fn = partial(seq_go_collate_pad, seq_set_size=self.num_samples, vocab=self.vocab)
 
     def __getitem__(self, go_term_index):
         annotated_prot_inds = np.where(self.annot_mat[:, go_term_index])[0]
@@ -59,7 +61,7 @@ class SequenceGODataset(Dataset):
         return len(self.go_terms)
 
 
-def seq_go_collate_pad(batch, seq_set_size=None, vocab_size=None, device=None):
+def seq_go_collate_pad(batch, seq_set_size=None, vocab=None, device=None):
     """
     Pads matrices of variable length
     Takes a batch_size-length list of (seq_set_size, alphabet_size) object numpy arrays and 
@@ -81,18 +83,16 @@ def seq_go_collate_pad(batch, seq_set_size=None, vocab_size=None, device=None):
     print(lengths)
     max_len = torch.max(lengths)
     print(max_len)
-    S_mask = torch.zeros((len(batch), seq_set_size, max_len))
+    S_mask = torch.ones((len(batch), seq_set_size, max_len), dtype=bool)
     for i in range(len(batch)):
         for j in range(len(seq_set)):
-            S_mask[i, j, :lengths[i][j]] = 1
+            S_mask[i, j, :lengths[i][j]] = False
     max_go_desc_length = max(go_desc_lengths)
 
     S_padded = torch.zeros((len(batch), seq_set_size, max_len))
-    S_padded[:, :seq_set_size, :] = len(CHARS) # add "no residue" entries in one-hot matrix
+    #S_padded[:, :seq_set_size, :] = len(CHARS) # add "no residue" entries in one-hot matrix
     
 
-    GO_padded = torch.zeros((len(batch), vocab_size, max_go_desc_length))
-    GO_padded[:, vocab_size - 1, :] = 1
     # pad
     for i in range(len(batch)):
         (seq_set, _) = batch[i]
@@ -104,8 +104,21 @@ def seq_go_collate_pad(batch, seq_set_size=None, vocab_size=None, device=None):
                 S_padded[i, j][:max_len] = torch.from_numpy(seq[:max_len, :].transpose())
         
     # handle GO descriptions. Pad max length of the GO description?
+    GO_padded = torch.zeros((len(batch), max_go_desc_length))
+    #GO_padded[:, :] = len(vocab) # padding token is last
+
     batch_go_descs = [torch.from_numpy(np.array(go_desc)) for (_, go_desc) in batch]
-    return S_padded, S_mask, batch_go_descs
+    batch_go_desc_lengths = [len(desc) for desc in batch_go_descs]
+    GO_mask = torch.ones(len(batch), max_go_desc_length, dtype=bool)
+    for i in range(len(batch)):
+        curr_go_desc = batch_go_descs[i]
+        curr_go_desc_length = batch_go_desc_lengths[i]
+        print(curr_go_desc)
+        GO_mask[i, :curr_go_desc_length] = False
+        for j, word in enumerate(curr_go_desc):
+            GO_padded[i, j] = word
+
+    return S_padded, S_mask, GO_padded, GO_mask
 
 
 class SequenceKeywordDataset(Dataset):
