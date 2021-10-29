@@ -40,6 +40,9 @@ class SequenceGODataset(Dataset):
         print(len(self.go_terms))
         tokenizer = get_tokenizer('basic_english') 
         tokenized = [tokenizer(desc) for desc in go_dict['descriptions']]
+        for token_list in tokenized:
+            token_list.insert(0, '<SOS>')
+            token_list.append('<EOS>')
         # get vocab size -- what if it's just character by character?
         self.vocab = list(set(itertools.chain.from_iterable(tokenized)))
         word_to_id = {token: idx for idx, token in enumerate(self.vocab)}

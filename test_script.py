@@ -69,7 +69,9 @@ metric_callback = MetricsCallback()
 trainer = Trainer(gpus=1, max_epochs=10, callbacks=metric_callback)
 trainer.fit(model, dl)
 logged_metrics = metric_callback.metrics
+print('Logged_metrics')
 print(logged_metrics)
 #trained_seq_embeds, trained_individual_keyword_embeds = trainer.predict(model, seq_kw_dataloader)
-predictions = trainer.predict(model, dl)[0]
-print(predictions)
+predictions = trainer.predict(model, dl)
+print('Predictions')
+print(predictions) # this is num_batches x num_samples_per_batch x num_seqs_per_set_sample x max_desc_len, need to be num_batches x num_samples_per_batch x max_desc_len

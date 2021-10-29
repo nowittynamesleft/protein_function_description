@@ -33,10 +33,12 @@ class PositionalEncoding(nn.Module):
                             self.pos_embedding[:token_embedding.size(0),:])
 
 class TokenEmbedding(nn.Module):
+
     def __init__(self, vocab_size: int, emb_size):
         super(TokenEmbedding, self).__init__()
         self.embedding = nn.Embedding(vocab_size, emb_size)
         self.emb_size = emb_size
+
     def forward(self, tokens: Tensor):
         return self.embedding(tokens.long()) * math.sqrt(self.emb_size)
 
@@ -115,9 +117,11 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         self.generator = nn.Linear(emb_size, tgt_vocab_size)
         self.src_tok_emb = TokenEmbedding(src_vocab_size, emb_size)
         self.tgt_tok_emb = TokenEmbedding(tgt_vocab_size, emb_size)
+        self.tgt_vocab_size = tgt_vocab_size
         self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout)
         self.loss_fn = nn.CrossEntropyLoss()
         self.len_convert = LengthConverter()
+        self.max_desc_len = 100
 
     def _max_lens(self, x_mask):
         ls = torch.max(torch.sum((x_mask == False).float(), dim=1))*torch.ones(x_mask.shape[0], device=self.device) # assuming mask is 0 when sequence should be shown
@@ -135,13 +139,18 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         
         for i in range(src.shape[0]): # seq set in batch
             #import ipdb; ipdb.set_trace()
+
+            avg_src_transformed_embed = self.encode_seq_set(src[i, ...], src_mask[i, ...], src_padding_mask[i, ...])
+            '''
             src_emb = self.positional_encoding(self.src_tok_emb(src[i, :, :]))
             print(src_emb.shape)
             transformed_embeds = torch.cat([self.transformer_encoder(src_emb[j, :].unsqueeze(0), src_mask[i, j, :], src_padding_mask[i, j, :].unsqueeze(0)) for j in range(src.shape[1])])
-
+            
             len_trans_embeds, _ = self.len_convert(transformed_embeds, self._max_lens(src_padding_mask[i, ...]), src_padding_mask[i, ...].float())
 
             avg_src_transformed_embed = torch.mean(len_trans_embeds, dim=0).unsqueeze(0)
+            '''
+
             tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg[i, :]).unsqueeze(0))
             outs = self.transformer_decoder(tgt_emb, avg_src_transformed_embed, 
                     tgt_mask[i, :], None, tgt_padding_mask[i, :].unsqueeze(0), None) # memory key padding is always assumed to be None
@@ -150,6 +159,13 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         outputs = torch.stack(outputs).squeeze(1)
         outputs = outputs.transpose(1,2)
         return outputs
+
+    def encode_seq_set(self, src, src_mask, src_padding_mask):
+        #import ipdb; ipdb.set_trace()
+        transformed_embeds = torch.cat([self.encode(src[j, :].unsqueeze(0), src_mask[j, :], src_padding_mask[j, :].unsqueeze(0)) for j in range(src.shape[0])])
+        len_trans_embeds, _ = self.len_convert(transformed_embeds, self._max_lens(src_padding_mask), src_padding_mask.float()) # len convert seems to have strange behavior (all features at a given position are the same after it)
+        avg_src_transformed_embed = torch.mean(len_trans_embeds, dim=0).unsqueeze(0)
+        return avg_src_transformed_embed
 
     def training_step(self, train_batch, batch_idx):
         S_padded, S_pad_mask, GO_padded, GO_pad_mask = train_batch 
@@ -165,7 +181,6 @@ class SeqSet2SeqTransformer(pl.LightningModule):
          
         return {'loss': loss}
 
-
     def validation_step(self, valid_batch, batch_idx):
         S_padded, S_pad_mask, GO_padded, GO_pad_mask = valid_batch 
         src_mask, tgt_mask = create_mask(S_padded, GO_padded, device=self.device)
@@ -180,29 +195,90 @@ class SeqSet2SeqTransformer(pl.LightningModule):
          
         return {'loss': loss}
 
-
     def predict_step(self, pred_batch, batch_idx):
-        S_padded, S_pad_mask, GO_padded, GO_pad_mask = pred_batch 
+        '''
+        TODO: make greedy decode step instead to actually make this a prediction method without requiring the expected output
+        '''
+        start_symbol = 0 # is this the index of the start token? prob not
+        end_symbol = self.tgt_vocab_size - 1
+        if len(pred_batch) == 4:
+            S_padded, S_pad_mask, _, _ = pred_batch
+        num_sets = S_padded.shape[0]
+        GO_padded = torch.ones((S_padded.shape[0], self.max_desc_len)).fill_(start_symbol).type(torch.long).to(self.device) # start GO description off with start token
+
         src_mask, tgt_mask = create_mask(S_padded, GO_padded, device=self.device)
 
-        outputs = self(src=S_padded, trg=GO_padded, src_mask=src_mask, 
-            tgt_mask=tgt_mask, src_padding_mask=S_pad_mask,
-            tgt_padding_mask=GO_pad_mask, memory_key_padding_mask=None)
+        for seq_set_ind in range(num_sets):
+            embedding = self.encode_seq_set(S_padded[seq_set_ind, ...], src_mask[seq_set_ind, ...], S_pad_mask[seq_set_ind, ...])
+            embedding = embedding.to(self.device)
 
-        return outputs
+            #ended_desc_mask = torch.zeros(num_sets, dtype=bool)
+            for i in range(self.max_desc_len - 1): # trying to make this batch wise but how do you break the loop for those that have an end symbol produced?
+                #import ipdb; ipdb.set_trace()
+                #memory_mask = torch.zeros(GO_padded.shape[0], memory.shape[0]).to(self.device).type(torch.bool)
+                
+                #import ipdb; ipdb.set_trace()
+                tgt_mask = (generate_square_subsequent_mask(GO_padded.size(1))
+                                            .type(torch.bool)).to(self.device)
+                out = self.decode(GO_padded[seq_set_ind,:].unsqueeze(0), embedding, tgt_mask)
+                out = out.transpose(1, 2)
+                prob = self.generator(out[:, :, -1])
+                _, next_word = torch.max(prob, dim = -1)
+                next_word = next_word.item()
+
+                '''
+                _, batch_next_words = torch.max(prob, dim = -1)
+                for j, word in enumerate(batch_next_words): # if any produced an end token in the past, permanently make all tokens afterwards end until every set is done
+                    if word == end_symbol:
+                        ended_desc_mask[j] = True
+                batch_next_words[ended_desc_mask] = end_symbol
+                GO_padded[:, i] = batch_next_words
+                if torch.all(batch_next_words == end_symbol):
+                  break
+                '''
+
+                GO_padded[seq_set_ind, i] = next_word
+                if next_word == end_symbol:
+                  break
+
+        return GO_padded
+
+    '''
+    def greedy_decode(model, src, src_mask, max_len, start_symbol):
+        src = src.to(device)
+        src_mask = src_mask.to(device)
+
+        memory = model.encode(src, src_mask)
+        ys = torch.ones(1, 1).fill_(start_symbol).type(torch.long).to(device)
+        for i in range(max_len-1):
+            memory = memory.to(device)
+            memory_mask = torch.zeros(ys.shape[0], memory.shape[0]).to(device).type(torch.bool)
+            tgt_mask = (generate_square_subsequent_mask(ys.size(0))
+                                        .type(torch.bool)).to(device)
+            out = model.decode(ys, memory, tgt_mask)
+            out = out.transpose(0, 1)
+            prob = model.generator(out[:, -1])
+            _, next_word = torch.max(prob, dim = 1)
+            next_word = next_word.item()
+
+            ys = torch.cat([ys,
+                            torch.ones(1, 1).type_as(src.data).fill_(next_word)], dim=0)
+            if next_word == EOS_IDX:
+              break
+        return ys
+    '''
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
         return optimizer
 
-    def encode(self, src: Tensor, src_mask: Tensor):
+    def encode(self, src: Tensor, src_mask: Tensor, src_padding_mask: Tensor):
         return self.transformer_encoder(self.positional_encoding(
-                            self.src_tok_emb(src)), src_mask)
+                            self.src_tok_emb(src)), src_mask, src_padding_mask)
 
     def decode(self, tgt: Tensor, memory: Tensor, tgt_mask: Tensor):
         return self.transformer_decoder(self.positional_encoding(
-                          self.tgt_tok_emb(tgt)), memory,
-                          tgt_mask)
+                          self.tgt_tok_emb(tgt)), memory, tgt_mask)
 
 
 def generate_square_subsequent_mask(sz, device=None):
