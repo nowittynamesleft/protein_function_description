@@ -35,26 +35,33 @@ class SequenceGODataset(Dataset):
         print(len(self.go_terms))
         self.annot_mat = self.annot_mat[:, keep_inds]
         self.go_terms = self.go_terms[keep_inds]
+        go_dict['descriptions'] = np.array(go_dict['descriptions'])[keep_inds]
         print('After removal:')
         print(self.annot_mat.shape)
         print(len(self.go_terms))
         tokenizer = get_tokenizer('basic_english') 
         tokenized = [tokenizer(desc) for desc in go_dict['descriptions']]
+        # get vocab size -- what if it's just character by character?
+        self.vocab = list(set(itertools.chain.from_iterable(tokenized)))
+        self.vocab.insert(0, '<SOS>')
+        self.vocab.append('<EOS>')
         for token_list in tokenized:
             token_list.insert(0, '<SOS>')
             token_list.append('<EOS>')
-        # get vocab size -- what if it's just character by character?
-        self.vocab = list(set(itertools.chain.from_iterable(tokenized)))
+            print(token_list)
         word_to_id = {token: idx for idx, token in enumerate(self.vocab)}
+        print('<SOS> and <EOS> token numbers:')
+        print(word_to_id['<SOS>'])
+        print(word_to_id['<EOS>'])
         token_ids = [[word_to_id[token] for token in tokens_doc] for tokens_doc in tokenized]
-        print(token_ids)
         '''
         one_hot_docs = [np.zeros((len(doc), len(self.vocab))) for doc in token_ids]
         for i, doc in enumerate(token_ids):
             for token_id in enumerate(doc):
                 one_hot_docs[i][token_id] = 1
         '''
-        self.go_descriptions = token_ids
+        self.go_descriptions = tokenized
+        self.go_token_ids = token_ids
         self.device = device
         
         self.prot_list = go_dict['prot_ids']
@@ -68,7 +75,7 @@ class SequenceGODataset(Dataset):
         annotated_prot_inds = np.where(self.annot_mat[:, go_term_index])[0]
         selected_inds = np.random.choice(annotated_prot_inds, size=self.num_samples)
         
-        return (self.seqs[selected_inds], self.go_descriptions[go_term_index])
+        return (self.seqs[selected_inds], self.go_token_ids[go_term_index])
 
     def __len__(self):
         return len(self.go_terms)
@@ -93,9 +100,7 @@ def seq_go_collate_pad(batch, seq_set_size=None, vocab=None, device=None):
         for j, seq in enumerate(seq_set):
             lengths[-1].append(len(seq))
     lengths = torch.tensor(lengths)
-    print(lengths)
     max_len = torch.max(lengths)
-    print(max_len)
     S_mask = torch.ones((len(batch), seq_set_size, max_len), dtype=bool)
     for i in range(len(batch)):
         for j in range(len(seq_set)):
@@ -125,7 +130,6 @@ def seq_go_collate_pad(batch, seq_set_size=None, vocab=None, device=None):
     for i in range(len(batch)):
         curr_go_desc = batch_go_descs[i]
         curr_go_desc_length = batch_go_desc_lengths[i]
-        print(curr_go_desc)
         GO_mask[i, :curr_go_desc_length] = False
         for j, word in enumerate(curr_go_desc):
             GO_padded[i, j] = word

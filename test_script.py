@@ -13,11 +13,20 @@ class MetricsCallback(Callback):
     def on_train_epoch_end(self, trainer, pl_module):
         self.metrics.append(trainer.callback_metrics)
 
+def convert_preds_to_words(predictions, vocab):
+    word_preds = []
+    for batch in predictions:
+        word_preds.append([])
+        for sample in batch:
+            word_preds[-1].append([vocab[ind] for ind in sample])
+    return word_preds
 
 device = torch.device("cuda:0")
 x = SequenceGODataset('first_6_prots.fasta', 'fake_data.pckl', 2, device=device)
+import ipdb; ipdb.set_trace()
 
-dl = DataLoader(x, batch_size=2, collate_fn=x.collate_fn)
+batch_size = 1
+dl = DataLoader(x, batch_size=batch_size, collate_fn=x.collate_fn)
 
 batch = next(iter(dl))
 
@@ -26,7 +35,7 @@ S_padded, S_pad_mask, GO_padded, GO_pad_mask = batch
 #model = NMTDescriptionGen(len(x.alphabet), len(x.vocab), 80, num_heads=1).to(device)
 model = SeqSet2SeqTransformer(num_encoder_layers=1, num_decoder_layers=1, 
         emb_size=256, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-        dim_feedforward=512, num_heads=4, dropout=0.0).to(device)
+        dim_feedforward=512, num_heads=4, dropout=0.0, vocab=x.vocab).to(device)
 
 # what kind of masks are these?
 print(S_padded.shape)
@@ -60,13 +69,13 @@ print(len(x.vocab))
 
 print('Max index of GO_padded')
 print(torch.max(GO_padded))
-output = model(src=S_padded.to(device), trg=GO_padded.to(device), src_mask=src_mask.to(device), 
-        tgt_mask=tgt_mask.to(device), src_padding_mask=S_pad_mask.to(device),
-        tgt_padding_mask=GO_pad_mask, memory_key_padding_mask=None)
-print(output)
+#output = model(src=S_padded.to(device), trg=GO_padded.to(device), src_mask=src_mask.to(device), 
+#               tgt_mask=tgt_mask.to(device), src_padding_mask=S_pad_mask.to(device),
+#               tgt_padding_mask=GO_pad_mask, memory_key_padding_mask=None)
+#print(output)
 
 metric_callback = MetricsCallback()
-trainer = Trainer(gpus=1, max_epochs=10, callbacks=metric_callback)
+trainer = Trainer(gpus=1, max_epochs=300, callbacks=metric_callback)
 trainer.fit(model, dl)
 logged_metrics = metric_callback.metrics
 print('Logged_metrics')
@@ -75,3 +84,11 @@ print(logged_metrics)
 predictions = trainer.predict(model, dl)
 print('Predictions')
 print(predictions) # this is num_batches x num_samples_per_batch x num_seqs_per_set_sample x max_desc_len, need to be num_batches x num_samples_per_batch x max_desc_len
+
+word_preds = convert_preds_to_words(predictions, x.vocab)
+trainer.test(model, dl, verbose=True)
+            
+print('Batch preds:')
+print(word_preds)
+print('Actual descriptions:')
+print(x.go_descriptions)
