@@ -22,10 +22,11 @@ def convert_preds_to_words(predictions, vocab):
     return word_preds
 
 device = torch.device("cuda:0")
-x = SequenceGODataset('first_6_prots.fasta', 'fake_data.pckl', 2, device=device)
-import ipdb; ipdb.set_trace()
+seq_set_len = 5
+x = SequenceGODataset('first_6_prots.fasta', 'fake_data.pckl', seq_set_len, device=device)
+#import ipdb; ipdb.set_trace()
 
-batch_size = 1
+batch_size = 9
 dl = DataLoader(x, batch_size=batch_size, collate_fn=x.collate_fn)
 
 batch = next(iter(dl))
@@ -74,10 +75,11 @@ print(torch.max(GO_padded))
 #               tgt_padding_mask=GO_pad_mask, memory_key_padding_mask=None)
 #print(output)
 
-metric_callback = MetricsCallback()
-trainer = Trainer(gpus=1, max_epochs=300, callbacks=metric_callback)
+#metric_callback = MetricsCallback()
+trainer = Trainer(gpus=1, max_epochs=1000)
 trainer.fit(model, dl)
-logged_metrics = metric_callback.metrics
+logged_metrics = trainer.callback_metrics
+#import ipdb; ipdb.set_trace()
 print('Logged_metrics')
 print(logged_metrics)
 #trained_seq_embeds, trained_individual_keyword_embeds = trainer.predict(model, seq_kw_dataloader)
@@ -86,9 +88,12 @@ print('Predictions')
 print(predictions) # this is num_batches x num_samples_per_batch x num_seqs_per_set_sample x max_desc_len, need to be num_batches x num_samples_per_batch x max_desc_len
 
 word_preds = convert_preds_to_words(predictions, x.vocab)
-trainer.test(model, dl, verbose=True)
+acc = trainer.test(model, dl, verbose=True)[0]['acc']
+print('Exact match accuracy')
+print(acc)
             
 print('Batch preds:')
 print(word_preds)
 print('Actual descriptions:')
 print(x.go_descriptions)
+

@@ -194,6 +194,8 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         print(self.convert_batch_preds_to_words(preds))
         print(GO_padded_output.shape)
         loss = self.loss_fn(outputs, GO_padded_output)
+        self.log_dict({'loss': loss})
+        #self.log("loss", loss, prog_bar=True, logger=True, on_step=False, on_epoch=True)
          
         return {'loss': loss}
 
@@ -209,7 +211,36 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         print(GO_padded.shape)
         loss = self.loss_fn(outputs, GO_padded)
          
-        return {'loss': loss}
+        return {'val_loss': loss}
+
+    def test_step(self, test_batch, batch_idx):
+        S_padded, S_pad_mask, GO_padded, GO_pad_mask = test_batch 
+        src_mask, tgt_mask = create_mask(S_padded, GO_padded, device=self.device)
+
+        preds = self.predict_step(test_batch, batch_idx)
+
+        print(GO_padded.shape)
+        #_, preds = outputs.max(axis=1)
+        acc = 0
+        #import ipdb; ipdb.set_trace()
+        end_symbol = self.tgt_vocab_size - 1
+        for i in range(len(preds)):
+            curr_GO_padded = GO_padded[i]
+            stripped_ind_list = []
+            for val in curr_GO_padded:
+                symbol = val.item()
+                stripped_ind_list.append(symbol)
+                if symbol == end_symbol:
+                    break
+            # stripped_ind_list now has only tokens that are before and including <EOS>
+            try:
+                if preds[i].tolist() == stripped_ind_list:
+                    acc += 1
+            except RuntimeError:
+                pass
+        #loss = self.loss_fn(outputs, GO_padded)
+        acc /= len(preds)
+        self.log_dict({'acc': acc})
 
     def predict_step(self, pred_batch, batch_idx):
         '''

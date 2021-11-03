@@ -80,6 +80,76 @@ class SequenceGODataset(Dataset):
     def __len__(self):
         return len(self.go_terms)
 
+class SequenceGOCSVDataset(Dataset):
+    """
+    Sequence GO Dataset class with descriptions.
+    GO term centric way of getting samples; so a batch size of 64 would
+    select 64 GO terms and sample num_samples sequences for each GO term,
+    returning the chosen sequences and descriptions for each GO term
+
+    CSV files are organized as follows:
+    GO_ID   GO_term_name    Description Annotated_prot_uniprot_ids  Sequences_comma_delimited 
+
+    for each GO_ID:
+        split sequences by comma, these are the list for that GO_ID
+
+
+    """
+    def __init__(self, fasta_fname, go_file, num_samples, device=None):
+        id2seq = load_fasta(fasta_fname)
+        go_dict = pickle.load(open(go_file, 'rb'))
+        self.annot_mat = np.array(go_dict['annot'])
+        self.go_terms = np.array(go_dict['go_terms'])
+        keep_inds = np.where(self.annot_mat.sum(axis=0) > 0)[0]
+        print('num go terms before removal of zero annot go terms:')
+        print(self.annot_mat.shape)
+        print(len(self.go_terms))
+        self.annot_mat = self.annot_mat[:, keep_inds]
+        self.go_terms = self.go_terms[keep_inds]
+        go_dict['descriptions'] = np.array(go_dict['descriptions'])[keep_inds]
+        print('After removal:')
+        print(self.annot_mat.shape)
+        print(len(self.go_terms))
+        tokenizer = get_tokenizer('basic_english') 
+        tokenized = [tokenizer(desc) for desc in go_dict['descriptions']]
+        # get vocab size -- what if it's just character by character?
+        self.vocab = list(set(itertools.chain.from_iterable(tokenized)))
+        self.vocab.insert(0, '<SOS>')
+        self.vocab.append('<EOS>')
+        for token_list in tokenized:
+            token_list.insert(0, '<SOS>')
+            token_list.append('<EOS>')
+            print(token_list)
+        word_to_id = {token: idx for idx, token in enumerate(self.vocab)}
+        print('<SOS> and <EOS> token numbers:')
+        print(word_to_id['<SOS>'])
+        print(word_to_id['<EOS>'])
+        token_ids = [[word_to_id[token] for token in tokens_doc] for tokens_doc in tokenized]
+        '''
+        one_hot_docs = [np.zeros((len(doc), len(self.vocab))) for doc in token_ids]
+        for i, doc in enumerate(token_ids):
+            for token_id in enumerate(doc):
+                one_hot_docs[i][token_id] = 1
+        '''
+        self.go_descriptions = tokenized
+        self.go_token_ids = token_ids
+        self.device = device
+        
+        self.prot_list = go_dict['prot_ids']
+        #self.seqs = np.array([seq2onehot(id2seq[prot]) for prot in self.prot_list], dtype=object)
+        self.seqs = np.array([seq2AAinds(id2seq[prot]) for prot in self.prot_list], dtype=object)
+        self.alphabet = CHARS
+        self.num_samples = num_samples
+        self.collate_fn = partial(seq_go_collate_pad, seq_set_size=self.num_samples, vocab=self.vocab, device=self.device)
+
+    def __getitem__(self, go_term_index):
+        annotated_prot_inds = np.where(self.annot_mat[:, go_term_index])[0]
+        selected_inds = np.random.choice(annotated_prot_inds, size=self.num_samples)
+        
+        return (self.seqs[selected_inds], self.go_token_ids[go_term_index])
+
+    def __len__(self):
+        return len(self.go_terms)
 
 def seq_go_collate_pad(batch, seq_set_size=None, vocab=None, device=None):
     """
