@@ -1,5 +1,5 @@
 from data import SequenceGOCSVDataset, seq_go_collate_pad
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 import torch
 #from models import NMTDescriptionGen
 from alt_transformer_model import SeqSet2SeqTransformer, create_mask
@@ -12,7 +12,6 @@ class MetricsCallback(Callback):
 
     def on_train_epoch_end(self, trainer, pl_module):
         self.metrics.append(trainer.logged_metrics['loss'])
-        print(trainer.logged_metrics['sample_output'])
 
 def convert_preds_to_words(predictions, vocab):
     word_preds = []
@@ -23,12 +22,13 @@ def convert_preds_to_words(predictions, vocab):
     return word_preds
 
 device = torch.device("cuda:0")
-seq_set_len = 5
+seq_set_len = 64
 #x = SequenceGODataset('first_6_prots.fasta', 'fake_data.pckl', seq_set_len, device=device)
-x = SequenceGOCSVDataset('uniprot_sprot_train_annot.csv', seq_set_len, device=device)
+x = SequenceGOCSVDataset('uniprot_sprot_training_annot.csv', seq_set_len, device=device)
+#x = SequenceGOCSVDataset('uniprot_sprot_test_annot.csv', seq_set_len, device=device)
 #import ipdb; ipdb.set_trace()
 
-batch_size = 9
+batch_size = 1
 dl = DataLoader(x, batch_size=batch_size, collate_fn=x.collate_fn)
 
 batch = next(iter(dl))
@@ -78,24 +78,31 @@ print(torch.max(GO_padded))
 #print(output)
 
 metric_callback = MetricsCallback()
-trainer = Trainer(gpus=1, max_epochs=1000, callbacks=metric_callback)
+trainer = Trainer(gpus=1, max_epochs=20, callbacks=metric_callback)
 trainer.fit(model, dl)
 logged_metrics = metric_callback.metrics
 #import ipdb; ipdb.set_trace()
 print('Logged_metrics')
 print(logged_metrics)
 #trained_seq_embeds, trained_individual_keyword_embeds = trainer.predict(model, seq_kw_dataloader)
-predictions = trainer.predict(model, dl)
-print('Predictions')
-print(predictions) # this is num_batches x num_samples_per_batch x num_seqs_per_set_sample x max_desc_len, need to be num_batches x num_samples_per_batch x max_desc_len
+subset = Subset(x, list(range(100)))
+test_dl = DataLoader(subset, batch_size=batch_size, collate_fn=x.collate_fn)
+predictions = trainer.predict(model, test_dl)
+#print('Predictions')
+#print(predictions) # this is num_batches x num_samples_per_batch x num_seqs_per_set_sample x max_desc_len, need to be num_batches x num_samples_per_batch x max_desc_len
 
 word_preds = convert_preds_to_words(predictions, x.vocab)
-acc = trainer.test(model, dl, verbose=True)[0]['acc']
-print('Exact match accuracy')
-print(acc)
+#acc = trainer.test(model, test_dl, verbose=True)[0]['acc']
+#print('Exact match accuracy')
+#print(acc)
             
 print('Batch preds:')
-print(word_preds)
+print(word_preds[0])
 print('Actual descriptions:')
-print(x.go_descriptions)
+print(x.go_descriptions[:batch_size]) # assumes subset is from the first N samples of the training set
 
+outfile = open('first_100_preds.txt', 'w')
+import ipdb; ipdb.set_trace()
+for i in range(100):
+    outfile.write('Prediction:\n' + ' '.join(word_preds[i][0][1:-1]) + '\nActual description:\n' + ' '.join(x.go_descriptions[i][1:-1]) + '\n')
+outfile.close()

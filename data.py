@@ -116,7 +116,7 @@ class SequenceGOCSVDataset(Dataset):
         for token_list in tokenized:
             token_list.insert(0, '<SOS>')
             token_list.append('<EOS>')
-            print(token_list)
+            #print(token_list)
         word_to_id = {token: idx for idx, token in enumerate(self.vocab)}
         print('<SOS> and <EOS> token numbers:')
         print(word_to_id['<SOS>'])
@@ -140,7 +140,9 @@ class SequenceGOCSVDataset(Dataset):
 
     def __getitem__(self, go_term_index):
         #annotated_prot_inds = np.where(self.annot_mat[:, go_term_index])[0]
-        selected_seqs = np.random.choice(self.go2seqs[self.go_terms[go_term_index]], size=self.num_samples)
+        annotated_seqs = self.go2seqs[self.go_terms[go_term_index]]
+        selected_inds = np.random.choice(np.arange(len(annotated_seqs)), size=self.num_samples)
+        selected_seqs = np.array(annotated_seqs)[selected_inds]
         
         return (selected_seqs, self.go_token_ids[go_term_index])
 

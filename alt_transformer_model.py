@@ -143,9 +143,9 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         
         src_transformed_list = []
         outputs = []
-        print(src.shape)
-        print('tgt_padding_mask shape')
-        print(tgt_padding_mask.shape) 
+        #print(src.shape)
+        #print('tgt_padding_mask shape')
+        #print(tgt_padding_mask.shape) 
         
         for i in range(src.shape[0]): # seq set in batch
             #import ipdb; ipdb.set_trace()
@@ -194,7 +194,11 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         #print(self.convert_batch_preds_to_words(preds))
         #print(GO_padded_output.shape)
         loss = self.loss_fn(outputs, GO_padded_output)
-        self.log_dict({'loss': loss, 'sample_output': outputs[0]})
+        #self.log_dict({'loss': loss, 'sample_output': outputs[0]})
+        self.log_dict({'loss': loss})
+        if batch_idx == 0:
+            print('First batch outputs:')
+            print(self.convert_batch_preds_to_words(preds))
         #self.log("loss", loss, prog_bar=True, logger=True, on_step=False, on_epoch=True)
          
         return {'loss': loss}
@@ -219,7 +223,6 @@ class SeqSet2SeqTransformer(pl.LightningModule):
 
         preds = self.predict_step(test_batch, batch_idx)
 
-        print(GO_padded.shape)
         #_, preds = outputs.max(axis=1)
         acc = 0
         #import ipdb; ipdb.set_trace()
