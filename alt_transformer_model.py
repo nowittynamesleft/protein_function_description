@@ -189,16 +189,16 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             tgt_mask=tgt_mask, src_padding_mask=S_pad_mask,
             tgt_padding_mask=GO_pad_mask, memory_key_padding_mask=None)
 
-        print(outputs.shape)
+        #print(outputs.shape)
         _, preds = outputs.max(axis=1)
-        print(self.convert_batch_preds_to_words(preds))
-        print(GO_padded_output.shape)
+        #print(self.convert_batch_preds_to_words(preds))
+        #print(GO_padded_output.shape)
         loss = self.loss_fn(outputs, GO_padded_output)
-        self.log_dict({'loss': loss})
+        self.log_dict({'loss': loss, 'sample_output': outputs[0]})
         #self.log("loss", loss, prog_bar=True, logger=True, on_step=False, on_epoch=True)
          
         return {'loss': loss}
-
+    
     def validation_step(self, valid_batch, batch_idx):
         S_padded, S_pad_mask, GO_padded, GO_pad_mask = valid_batch 
         src_mask, tgt_mask = create_mask(S_padded, GO_padded, device=self.device)

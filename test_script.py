@@ -1,4 +1,4 @@
-from data import SequenceGODataset, seq_go_collate_pad
+from data import SequenceGOCSVDataset, seq_go_collate_pad
 from torch.utils.data import DataLoader
 import torch
 #from models import NMTDescriptionGen
@@ -11,7 +11,8 @@ class MetricsCallback(Callback):
         self.metrics = []
 
     def on_train_epoch_end(self, trainer, pl_module):
-        self.metrics.append(trainer.callback_metrics)
+        self.metrics.append(trainer.logged_metrics['loss'])
+        print(trainer.logged_metrics['sample_output'])
 
 def convert_preds_to_words(predictions, vocab):
     word_preds = []
@@ -23,7 +24,8 @@ def convert_preds_to_words(predictions, vocab):
 
 device = torch.device("cuda:0")
 seq_set_len = 5
-x = SequenceGODataset('first_6_prots.fasta', 'fake_data.pckl', seq_set_len, device=device)
+#x = SequenceGODataset('first_6_prots.fasta', 'fake_data.pckl', seq_set_len, device=device)
+x = SequenceGOCSVDataset('uniprot_sprot_train_annot.csv', seq_set_len, device=device)
 #import ipdb; ipdb.set_trace()
 
 batch_size = 9
@@ -75,10 +77,10 @@ print(torch.max(GO_padded))
 #               tgt_padding_mask=GO_pad_mask, memory_key_padding_mask=None)
 #print(output)
 
-#metric_callback = MetricsCallback()
-trainer = Trainer(gpus=1, max_epochs=1000)
+metric_callback = MetricsCallback()
+trainer = Trainer(gpus=1, max_epochs=1000, callbacks=metric_callback)
 trainer.fit(model, dl)
-logged_metrics = trainer.callback_metrics
+logged_metrics = metric_callback.metrics
 #import ipdb; ipdb.set_trace()
 print('Logged_metrics')
 print(logged_metrics)

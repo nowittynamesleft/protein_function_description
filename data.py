@@ -11,6 +11,7 @@ from torchtext.data.utils import get_tokenizer
 import itertools
 from sklearn.preprocessing import OneHotEncoder, LabelEncoder
 from functools import partial
+import pandas as pd
 
 
 CHARS = ['R', 'X', 'S', 'G', 'W', 'I', 'Q', 'A', 'T', 'V', 'K', 'Y', 'C', 'N', 'L', 'F', 'D', 'M', 'P', 'H', 'E', 'U', 'O', 'B', 'Z', '-']
@@ -88,30 +89,26 @@ class SequenceGOCSVDataset(Dataset):
     returning the chosen sequences and descriptions for each GO term
 
     CSV files are organized as follows:
-    GO_ID   GO_term_name    Description Annotated_prot_uniprot_ids  Sequences_comma_delimited 
+    GO-term   GO-name    GO-def Prot-names  Prot-seqs 
 
     for each GO_ID:
         split sequences by comma, these are the list for that GO_ID
 
 
     """
-    def __init__(self, fasta_fname, go_file, num_samples, device=None):
-        id2seq = load_fasta(fasta_fname)
-        go_dict = pickle.load(open(go_file, 'rb'))
-        self.annot_mat = np.array(go_dict['annot'])
-        self.go_terms = np.array(go_dict['go_terms'])
-        keep_inds = np.where(self.annot_mat.sum(axis=0) > 0)[0]
-        print('num go terms before removal of zero annot go terms:')
-        print(self.annot_mat.shape)
-        print(len(self.go_terms))
-        self.annot_mat = self.annot_mat[:, keep_inds]
-        self.go_terms = self.go_terms[keep_inds]
-        go_dict['descriptions'] = np.array(go_dict['descriptions'])[keep_inds]
-        print('After removal:')
-        print(self.annot_mat.shape)
+    def __init__(self, go_file, num_samples, device=None):
+        #id2seq = load_fasta(fasta_fname)
+        annot_df = pd.read_csv(go_file, sep='\t')
+        prot_seq_rows = annot_df.apply(lambda row: row['Prot-seqs'].split(','), axis=1)
+        prot_seq_rows = [[seq2AAinds(prot) for prot in prot_seq_row] for prot_seq_row in prot_seq_rows]
+        self.go2seqs = dict(zip(annot_df['GO-term'], prot_seq_rows))
+
+        self.go_terms = np.array(annot_df['GO-term'])
+        self.go_names = np.array(annot_df['GO-name'])
+        print('Num go terms')
         print(len(self.go_terms))
         tokenizer = get_tokenizer('basic_english') 
-        tokenized = [tokenizer(desc) for desc in go_dict['descriptions']]
+        tokenized = [tokenizer(desc) for desc in annot_df['GO-def']]
         # get vocab size -- what if it's just character by character?
         self.vocab = list(set(itertools.chain.from_iterable(tokenized)))
         self.vocab.insert(0, '<SOS>')
@@ -135,18 +132,17 @@ class SequenceGOCSVDataset(Dataset):
         self.go_token_ids = token_ids
         self.device = device
         
-        self.prot_list = go_dict['prot_ids']
+        self.prot_lists = [prots.split(',') for prots in annot_df['Prot-names']]
         #self.seqs = np.array([seq2onehot(id2seq[prot]) for prot in self.prot_list], dtype=object)
-        self.seqs = np.array([seq2AAinds(id2seq[prot]) for prot in self.prot_list], dtype=object)
         self.alphabet = CHARS
         self.num_samples = num_samples
         self.collate_fn = partial(seq_go_collate_pad, seq_set_size=self.num_samples, vocab=self.vocab, device=self.device)
 
     def __getitem__(self, go_term_index):
-        annotated_prot_inds = np.where(self.annot_mat[:, go_term_index])[0]
-        selected_inds = np.random.choice(annotated_prot_inds, size=self.num_samples)
+        #annotated_prot_inds = np.where(self.annot_mat[:, go_term_index])[0]
+        selected_seqs = np.random.choice(self.go2seqs[self.go_terms[go_term_index]], size=self.num_samples)
         
-        return (self.seqs[selected_inds], self.go_token_ids[go_term_index])
+        return (selected_seqs, self.go_token_ids[go_term_index])
 
     def __len__(self):
         return len(self.go_terms)
