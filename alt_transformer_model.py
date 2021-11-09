@@ -63,9 +63,9 @@ class LengthConverter(pl.LightningModule):
             ls - target lengths, shape: B
             z_mask - latent mask, shape: B x L_x
         """
-        n = z_mask.sum(1).to(self.device)
-        arange_l = torch.arange(ls.max().long()).to(self.device)
-        arange_z = torch.arange(z.size(1)).to(self.device)
+        n = z_mask.sum(1)
+        arange_l = torch.arange(ls.max().long()).type_as(z)
+        arange_z = torch.arange(z.size(1)).type_as(z)
         '''
         if torch.cuda.is_available():
             arange_l = arange_l.cuda()
@@ -77,7 +77,7 @@ class LengthConverter(pl.LightningModule):
 
         # assuming else statement..
         distance = torch.clamp(arange_z - mu[:, :, None], -100, 100)
-        logits = (- torch.pow(2, distance) / (2. * self.sigma ** 2)).to(self.device)
+        logits = (- torch.pow(2, distance) / (2. * self.sigma ** 2))
         '''
         if OPTS.fp16:
             arange_l = arange_l.half()
@@ -90,7 +90,7 @@ class LengthConverter(pl.LightningModule):
             logits = - torch.pow(2, distance) / (2. * self.sigma ** 2)
         '''
         logits = logits * z_mask[:, None, :].float() - 999. * (1 - z_mask[:, None, :].float())
-        weight = torch.softmax(logits, 2).to(self.device)
+        weight = torch.softmax(logits, 2)
         # z_prime = (z[:, None, :, :] * weight[:, :, :, None]).sum(2) # use torch.multiply instead, to do dot product between two matrices
         z_prime = torch.matmul(weight, z)
         """
@@ -130,6 +130,11 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         word_preds = []
         for sample in batch:
             word_preds.append([self.vocab[ind] for ind in sample])
+        return word_preds
+
+
+    def convert_sample_preds_to_words(self, sample):
+        word_preds = [self.vocab[ind] for ind in sample]
         return word_preds
 
 
@@ -197,13 +202,14 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         #self.log_dict({'loss': loss, 'sample_output': outputs[0]})
         self.log_dict({'loss': loss})
         if batch_idx == 0:
-            print('First batch outputs:')
-            print(self.convert_batch_preds_to_words(preds))
+            print('First batch first sample outputs:')
+            print(self.convert_sample_preds_to_words(preds[0]))
         #self.log("loss", loss, prog_bar=True, logger=True, on_step=False, on_epoch=True)
          
         return {'loss': loss}
     
     def validation_step(self, valid_batch, batch_idx):
+        # get greedy decoding of the first couple samples
         S_padded, S_pad_mask, GO_padded, GO_pad_mask = valid_batch 
         src_mask, tgt_mask = create_mask(S_padded, GO_padded, device=self.device)
 

@@ -25,7 +25,7 @@ class SequenceGODataset(Dataset):
     select 64 GO terms and sample num_samples sequences for each GO term,
     returning the chosen sequences and descriptions for each GO term
     """
-    def __init__(self, fasta_fname, go_file, num_samples, device=None):
+    def __init__(self, fasta_fname, go_file, num_samples):
         id2seq = load_fasta(fasta_fname)
         go_dict = pickle.load(open(go_file, 'rb'))
         self.annot_mat = np.array(go_dict['annot'])
@@ -43,7 +43,7 @@ class SequenceGODataset(Dataset):
         tokenizer = get_tokenizer('basic_english') 
         tokenized = [tokenizer(desc) for desc in go_dict['descriptions']]
         # get vocab size -- what if it's just character by character?
-        self.vocab = list(set(itertools.chain.from_iterable(tokenized)))
+        self.vocab = sorted(list(set(itertools.chain.from_iterable(tokenized))))
         self.vocab.insert(0, '<SOS>')
         self.vocab.append('<EOS>')
         for token_list in tokenized:
@@ -63,7 +63,6 @@ class SequenceGODataset(Dataset):
         '''
         self.go_descriptions = tokenized
         self.go_token_ids = token_ids
-        self.device = device
         
         self.prot_list = go_dict['prot_ids']
         #self.seqs = np.array([seq2onehot(id2seq[prot]) for prot in self.prot_list], dtype=object)
@@ -96,7 +95,7 @@ class SequenceGOCSVDataset(Dataset):
 
 
     """
-    def __init__(self, go_file, num_samples, device=None):
+    def __init__(self, go_file, num_samples):
         #id2seq = load_fasta(fasta_fname)
         annot_df = pd.read_csv(go_file, sep='\t')
         prot_seq_rows = annot_df.apply(lambda row: row['Prot-seqs'].split(','), axis=1)
@@ -110,7 +109,7 @@ class SequenceGOCSVDataset(Dataset):
         tokenizer = get_tokenizer('basic_english') 
         tokenized = [tokenizer(desc) for desc in annot_df['GO-def']]
         # get vocab size -- what if it's just character by character?
-        self.vocab = list(set(itertools.chain.from_iterable(tokenized)))
+        self.vocab = sorted(list(set(itertools.chain.from_iterable(tokenized))))
         self.vocab.insert(0, '<SOS>')
         self.vocab.append('<EOS>')
         for token_list in tokenized:
@@ -130,13 +129,13 @@ class SequenceGOCSVDataset(Dataset):
         '''
         self.go_descriptions = tokenized
         self.go_token_ids = token_ids
-        self.device = device
+        #self.device = device
         
         self.prot_lists = [prots.split(',') for prots in annot_df['Prot-names']]
         #self.seqs = np.array([seq2onehot(id2seq[prot]) for prot in self.prot_list], dtype=object)
         self.alphabet = CHARS
         self.num_samples = num_samples
-        self.collate_fn = partial(seq_go_collate_pad, seq_set_size=self.num_samples, vocab=self.vocab, device=self.device)
+        self.collate_fn = partial(seq_go_collate_pad, seq_set_size=self.num_samples, vocab=self.vocab)
 
     def __getitem__(self, go_term_index):
         #annotated_prot_inds = np.where(self.annot_mat[:, go_term_index])[0]
@@ -149,7 +148,7 @@ class SequenceGOCSVDataset(Dataset):
     def __len__(self):
         return len(self.go_terms)
 
-def seq_go_collate_pad(batch, seq_set_size=None, vocab=None, device=None):
+def seq_go_collate_pad(batch, seq_set_size=None, vocab=None):
     """
     Pads matrices of variable length
     Takes a batch_size-length list of (seq_set_size, alphabet_size) object numpy arrays and 
@@ -202,7 +201,8 @@ def seq_go_collate_pad(batch, seq_set_size=None, vocab=None, device=None):
         for j, word in enumerate(curr_go_desc):
             GO_padded[i, j] = word
 
-    return S_padded.to(device), S_mask.to(device), GO_padded.to(device), GO_mask.to(device)
+    #return S_padded.to(device), S_mask.to(device), GO_padded.to(device), GO_mask.to(device)
+    return S_padded, S_mask, GO_padded, GO_mask
 
 
 class SequenceKeywordDataset(Dataset):
