@@ -252,9 +252,6 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         self.log_dict({'acc': acc})
 
     def predict_step(self, pred_batch, batch_idx):
-        '''
-        TODO: make greedy decode step instead to actually make this a prediction method without requiring the expected output
-        '''
         start_symbol = 0 # is this the index of the start token? prob not
         end_symbol = self.tgt_vocab_size - 1 # is this the index of the end token?
         if len(pred_batch) == 4:
@@ -307,6 +304,43 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             GO_padded[seq_set_ind] = curr_GO_padded
 
         return GO_padded
+
+    def beam_search(self, pred_batch, batch_idx):
+        start_symbol = 0
+        end_symbol = self.tgt_vocab_size - 1 # is this the index of the end token?
+        if len(pred_batch) == 4:
+            S_padded, S_pad_mask, _, _ = pred_batch
+        num_sets = S_padded.shape[0]
+        GO_padded = [torch.ones((1)).fill_(start_symbol).type(torch.long).to(self.device) for i in range(num_sets)] # start GO description off with start token
+
+        src_mask = torch.zeros((S_padded.shape[0], S_padded.shape[1], S_padded.shape[2], S_padded.shape[2]), device=self.device).type(torch.bool).to(self.device)
+
+        for seq_set_ind in range(num_sets):
+            #import ipdb; ipdb.set_trace()
+            embedding = self.encode_seq_set(S_padded[seq_set_ind, ...], src_mask[seq_set_ind, ...], S_pad_mask[seq_set_ind, ...])
+            #embedding = embedding.to(self.device)
+
+            curr_GO_padded = GO_padded[seq_set_ind]
+            #ended_desc_mask = torch.zeros(num_sets, dtype=bool)
+            for i in range(self.max_desc_len - 1): 
+                #import ipdb; ipdb.set_trace()
+                # breadth-first search
+                tgt_mask = (generate_square_subsequent_mask(curr_GO_padded.size(0))).to(self.device)
+                tgt_emb = self.positional_encoding(self.tgt_tok_emb(curr_GO_padded).unsqueeze(0))
+                out = self.transformer_decoder(tgt_emb, embedding, 
+                        None, None, None, None) # memory key padding is always assumed to be None
+                out = out.transpose(1, 2)
+                prob = self.generator(out[:, :, -1])
+                _, next_word = torch.max(prob, dim = -1)
+                curr_GO_padded = torch.cat((curr_GO_padded, next_word), dim=0)
+                next_word = next_word.item()
+
+                if next_word == end_symbol:
+                    break
+            GO_padded[seq_set_ind] = curr_GO_padded
+
+        return GO_padded
+
 
     '''
     def greedy_decode(model, src, src_mask, max_len, start_symbol):
