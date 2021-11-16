@@ -21,6 +21,7 @@ def arguments():
     args.add_argument('--load_model', type=str, default=None, help='load model to continue training')
     args.add_argument('--load_model_predict', type=str, default=None, help='load model to predict only')
     args.add_argument('--num_pred_terms', type=int, default=100, help='how many descriptions to predict to compare to real go terms')
+    args.add_argument('--test', action='store_true', help='code testing flag, do not save model checkpoints, only train on num_pred_terms GO terms')
 
     args = args.parse_args()
     print(args)
@@ -78,7 +79,7 @@ if __name__ == '__main__':
 #model = SeqSet2SeqTransformer(num_encoder_layers=1, num_decoder_layers=1, 
 #        emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
 #       dim_feedforward=512, num_heads=4, dropout=0.0, vocab=x.vocab).to(device)
-    model = SeqSet2SeqTransformer(num_encoder_layers=3, num_decoder_layers=3, 
+    model = SeqSet2SeqTransformer(num_encoder_layers=1, num_decoder_layers=1, 
             emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
            dim_feedforward=512, num_heads=4, dropout=0.0, vocab=x.vocab)
 
@@ -119,14 +120,16 @@ if __name__ == '__main__':
 
     metric_callback = MetricsCallback()
 #trainer = Trainer(gpus=1, max_epochs=20, callbacks=metric_callback)
-    trainer = Trainer(precision=16, gpus=num_gpus, max_epochs=args.epochs, auto_select_gpus=True, 
-            callbacks=metric_callback, strategy=DDPPlugin(find_unused_parameters=False))
-#import ipdb; ipdb.set_trace()
+    trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs, auto_select_gpus=True,  # mixed precision causes nan loss, so back to regular precision.
+            callbacks=metric_callback, strategy=DDPPlugin(find_unused_parameters=False), checkpoint_callback=(not args.test), logger=(not args.test))
     if args.load_model_predict is None:
         if args.load_model is not None:
             print('Loading model for training: ' + args.load_model)
             ckpt = torch.load(args.load_model)
             model.load_state_dict(ckpt['state_dict'])
+        if args.test:
+            subset = Subset(x, list(range(args.num_pred_terms)))
+            dl = DataLoader(subset, batch_size=args.batch_size, collate_fn=x.collate_fn, num_workers=dl_workers, pin_memory=True)
         trainer.fit(model, dl)
         logged_metrics = metric_callback.metrics
         print('Logged_metrics')
@@ -162,8 +165,8 @@ if __name__ == '__main__':
 
     outfile = open(args.save_prefix + 'first_100_preds.txt', 'w')
     #import ipdb; ipdb.set_trace()
-    print('All word preds:')
-    print(word_preds)
+    #print('All word preds:')
+    #print(word_preds)
     for i in range(args.num_pred_terms):
         outfile.write('Prediction:\n' + ' '.join(word_preds[i]) + '\nActual description:\n' + ' '.join(x.go_descriptions[i]) + '\n')
     outfile.close()

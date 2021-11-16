@@ -204,6 +204,8 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         if batch_idx == 0:
             print('First batch first sample outputs:')
             print(self.convert_sample_preds_to_words(preds[0]))
+            print('Actual description:')
+            print(self.convert_sample_preds_to_words(GO_padded_all[0]))
         #self.log("loss", loss, prog_bar=True, logger=True, on_step=False, on_epoch=True)
          
         return {'loss': loss}
@@ -251,6 +253,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         acc /= len(preds)
         self.log_dict({'acc': acc})
 
+    '''
     def predict_step(self, pred_batch, batch_idx):
         start_symbol = 0 # is this the index of the start token? prob not
         end_symbol = self.tgt_vocab_size - 1 # is this the index of the end token?
@@ -288,28 +291,31 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                 _, next_word = torch.max(prob, dim = -1)
                 curr_GO_padded = torch.cat((curr_GO_padded, next_word), dim=0)
                 next_word = next_word.item()
-                '''
-                _, batch_next_words = torch.max(prob, dim = -1)
-                for j, word in enumerate(batch_next_words): # if any produced an end token in the past, permanently make all tokens afterwards end until every set is done
-                    if word == end_symbol:
-                        ended_desc_mask[j] = True
-                batch_next_words[ended_desc_mask] = end_symbol
-                GO_padded = torch.cat(GO_padded, batch_next_words, dim=1)
-                if torch.all(batch_next_words == end_symbol):
-                  break
-                '''
 
                 if next_word == end_symbol:
                     break
             GO_padded[seq_set_ind] = curr_GO_padded
 
         return GO_padded
+    '''
+    def detect_description_duplicates(self, descriptions):
+        for i, description_1 in enumerate(descriptions):
+            for j, description_2 in enumerate(descriptions):
+                if description_1 == description_2 and i != j:
+                    print('DUPLICATED')
+                    print(descriptions)
+                    return True
+        return False
 
-    def beam_search(self, pred_batch, batch_idx):
+    def predict_step(self, pred_batch, batch_idx):
+        print('Beam search')
+        beam_width = 3
         start_symbol = 0
         end_symbol = self.tgt_vocab_size - 1 # is this the index of the end token?
         if len(pred_batch) == 4:
-            S_padded, S_pad_mask, _, _ = pred_batch
+            S_padded, S_pad_mask, actual_GO_padded, _ = pred_batch
+        elif len(pred_batch) == 2:
+            S_padded, S_pad_mask = pred_batch
         num_sets = S_padded.shape[0]
         GO_padded = [torch.ones((1)).fill_(start_symbol).type(torch.long).to(self.device) for i in range(num_sets)] # start GO description off with start token
 
@@ -318,29 +324,86 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         for seq_set_ind in range(num_sets):
             #import ipdb; ipdb.set_trace()
             embedding = self.encode_seq_set(S_padded[seq_set_ind, ...], src_mask[seq_set_ind, ...], S_pad_mask[seq_set_ind, ...])
-            #embedding = embedding.to(self.device)
 
             curr_GO_padded = GO_padded[seq_set_ind]
-            #ended_desc_mask = torch.zeros(num_sets, dtype=bool)
-            for i in range(self.max_desc_len - 1): 
-                #import ipdb; ipdb.set_trace()
-                # breadth-first search
-                tgt_mask = (generate_square_subsequent_mask(curr_GO_padded.size(0))).to(self.device)
-                tgt_emb = self.positional_encoding(self.tgt_tok_emb(curr_GO_padded).unsqueeze(0))
-                out = self.transformer_decoder(tgt_emb, embedding, 
-                        None, None, None, None) # memory key padding is always assumed to be None
-                out = out.transpose(1, 2)
-                prob = self.generator(out[:, :, -1])
-                _, next_word = torch.max(prob, dim = -1)
-                curr_GO_padded = torch.cat((curr_GO_padded, next_word), dim=0)
-                next_word = next_word.item()
+            # init candidate sentences
+            out, prob = self.get_next_token_probs(curr_GO_padded, embedding)
+            candidate_sentences = [curr_GO_padded for i in range(beam_width)] # init with <SOS> token 
+            top_probs, top_words = torch.topk(prob.squeeze(), beam_width, dim=-1, largest=True)
+            top_log_probs = torch.log(top_probs)
 
-                if next_word == end_symbol:
-                    break
-            GO_padded[seq_set_ind] = curr_GO_padded
+            candidate_log_probs = torch.log(torch.ones((beam_width)).type_as(top_probs))
+            candidate_log_probs += top_log_probs
+            for beam in range(beam_width):
+                candidate_sentences[beam] = torch.cat([candidate_sentences[beam], top_words[beam].unsqueeze(0)])
 
+            candidates_ended = False
+            while not candidates_ended:
+                #print('Current candidates:')
+                sentences = [self.convert_sample_preds_to_words(sample) for sample in candidate_sentences]
+
+                #print(sentences)
+                curr_log_probs = []
+                curr_words = []
+                for beam in range(beam_width):
+                    if candidate_sentences[beam][-1] != end_symbol:
+                        out, prob = self.get_next_token_probs(candidate_sentences[beam], embedding)
+                        top_probs, top_words = torch.topk(prob.squeeze(), beam_width, dim=-1, largest=True)
+                        top_log_probs = torch.log(top_probs)
+                        curr_log_probs.append(candidate_log_probs[beam] + top_log_probs)
+                        curr_words.append(top_words)
+                    else: # if it's ended already, zero out the probabilities of next tokens
+                        #import ipdb; ipdb.set_trace()
+                        #top_probs = torch.ones((beam_width)).type_as(prob)*1e-9 # just tiny probabilities for no nans
+                        top_log_probs = torch.zeros((beam_width)).type_as(prob)
+                        curr_log_probs.append(candidate_log_probs[beam] + top_log_probs)
+                        curr_words.append(torch.zeros((beam_width)).type_as(top_words))
+
+                next_words = torch.cat(curr_words)
+                top_log_probs, top_word_inds = torch.topk(torch.stack(curr_log_probs).flatten(), beam_width, dim=-1, largest=True)
+                assert len(next_words) == len(torch.stack(curr_log_probs).flatten())
+                #print(self.convert_sample_preds_to_words(next_words))
+                candidate_log_probs = top_log_probs 
+                # get the actual sentences corresponding to these top log probs
+                new_candidate_sentences = []
+                for beam in range(beam_width):
+                    top_word_ind = top_word_inds[beam]
+                    first_word_beam_ind = int(top_word_ind.item()/beam_width)
+                    second_word = next_words[top_word_ind]
+                    selected_candidate = candidate_sentences[first_word_beam_ind]
+                    if selected_candidate[-1] != end_symbol:
+                        new_candidate_sentence = torch.cat([selected_candidate, second_word.unsqueeze(0)])
+                        new_candidate_sentences.append(new_candidate_sentence)
+                    else:
+                        new_candidate_sentences.append(selected_candidate) # just keep the old one
+                has_duplicates = self.detect_description_duplicates(self.convert_batch_preds_to_words(new_candidate_sentences))
+                candidate_sentences = new_candidate_sentences
+                for sent_ind, candidate_sentence in enumerate(candidate_sentences):
+                    if candidate_sentence[-1] != end_symbol and len(candidate_sentence) != self.max_desc_len:
+                        break
+                    elif sent_ind == len(candidate_sentences) - 1: # if it reached the end without breaking, all candidates end with <EOS>
+                        candidates_ended = True
+            #import ipdb; ipdb.set_trace()
+            #print(candidate_log_probs)
+            top_log_prob, top_candidate = torch.max(candidate_log_probs, 0)
+            #print('Top log prob: ' + str(top_log_prob))
+            GO_padded[seq_set_ind] = candidate_sentences[top_candidate]
+            #print('Top candidate: ')
+            print('All candidates:')
+            print(self.convert_batch_preds_to_words(candidate_sentences))
+            print('Actual description:')
+            print(self.convert_sample_preds_to_words(actual_GO_padded[seq_set_ind]))
         return GO_padded
 
+
+    def get_next_token_probs(self, curr_GO_padded, embedding):
+        tgt_mask = (generate_square_subsequent_mask(curr_GO_padded.size(0))).to(self.device)
+        tgt_emb = self.positional_encoding(self.tgt_tok_emb(curr_GO_padded).unsqueeze(0))
+        out = self.transformer_decoder(tgt_emb, embedding, 
+                None, None, None, None) # memory key padding is always assumed to be None
+        out = out.transpose(1, 2)
+        prob = self.generator(out[:, :, -1])
+        return out, prob
 
     '''
     def greedy_decode(model, src, src_mask, max_len, start_symbol):
