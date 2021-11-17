@@ -328,16 +328,17 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             curr_GO_padded = GO_padded[seq_set_ind]
             # init candidate sentences
             out, prob = self.get_next_token_probs(curr_GO_padded, embedding)
+            prob = torch.softmax(prob.squeeze(), dim=-1)
             candidate_sentences = [curr_GO_padded for i in range(beam_width)] # init with <SOS> token 
-            top_probs, top_words = torch.topk(prob.squeeze(), beam_width, dim=-1, largest=True)
-            top_log_probs = torch.log(top_probs)
+            top_probs, top_words = torch.topk(prob, beam_width, dim=-1, largest=True)
 
-            candidate_log_probs = torch.log(torch.ones((beam_width)).type_as(top_probs))
-            candidate_log_probs += top_log_probs
+            candidate_probs = torch.log(torch.ones((beam_width)).type_as(top_probs))
+            candidate_probs += top_probs
             for beam in range(beam_width):
                 candidate_sentences[beam] = torch.cat([candidate_sentences[beam], top_words[beam].unsqueeze(0)])
 
             candidates_ended = False
+            #import ipdb; ipdb.set_trace()
             while not candidates_ended:
                 #print('Current candidates:')
                 sentences = [self.convert_sample_preds_to_words(sample) for sample in candidate_sentences]
@@ -348,22 +349,24 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                 for beam in range(beam_width):
                     if candidate_sentences[beam][-1] != end_symbol:
                         out, prob = self.get_next_token_probs(candidate_sentences[beam], embedding)
-                        top_probs, top_words = torch.topk(prob.squeeze(), beam_width, dim=-1, largest=True)
-                        top_log_probs = torch.log(top_probs)
-                        curr_log_probs.append(candidate_log_probs[beam] + top_log_probs)
+                        prob = torch.softmax(prob.squeeze(), dim=-1)
+                        top_probs, top_words = torch.topk(prob, beam_width, dim=-1, largest=True)
+                        curr_log_probs.append(candidate_probs[beam] + torch.log(top_probs))
                         curr_words.append(top_words)
                     else: # if it's ended already, zero out the probabilities of next tokens
                         #import ipdb; ipdb.set_trace()
-                        #top_probs = torch.ones((beam_width)).type_as(prob)*1e-9 # just tiny probabilities for no nans
-                        top_log_probs = torch.zeros((beam_width)).type_as(prob)
-                        curr_log_probs.append(candidate_log_probs[beam] + top_log_probs)
+                        #top_probs = torch.ones((beam_width)).type_as(prob)*1e-13 # just tiny probabilities for no nans
+                        #top_log_probs = torch.log(top_probs)
+                        #top_log_probs = torch.zeros((beam_width)).type_as(prob)
+                        #curr_log_probs.append(candidate_log_probs[beam] + top_log_probs)
+                        curr_log_probs.append(candidate_probs[beam] + torch.zeros((beam_width)).type_as(prob))
                         curr_words.append(torch.zeros((beam_width)).type_as(top_words))
 
                 next_words = torch.cat(curr_words)
-                top_log_probs, top_word_inds = torch.topk(torch.stack(curr_log_probs).flatten(), beam_width, dim=-1, largest=True)
+                top_probs, top_word_inds = torch.topk(torch.stack(curr_log_probs).flatten(), beam_width, dim=-1, largest=True)
                 assert len(next_words) == len(torch.stack(curr_log_probs).flatten())
                 #print(self.convert_sample_preds_to_words(next_words))
-                candidate_log_probs = top_log_probs 
+                candidate_probs = top_probs 
                 # get the actual sentences corresponding to these top log probs
                 new_candidate_sentences = []
                 for beam in range(beam_width):
@@ -385,7 +388,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                         candidates_ended = True
             #import ipdb; ipdb.set_trace()
             #print(candidate_log_probs)
-            top_log_prob, top_candidate = torch.max(candidate_log_probs, 0)
+            top_prob, top_candidate = torch.max(candidate_probs, 0)
             #print('Top log prob: ' + str(top_log_prob))
             GO_padded[seq_set_ind] = candidate_sentences[top_candidate]
             #print('Top candidate: ')
