@@ -201,30 +201,34 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         #print(GO_padded_output.shape)
         loss = self.loss_fn(outputs, GO_padded_output)
         #self.log_dict({'loss': loss, 'sample_output': outputs[0]})
-        self.log_dict({'loss': loss})
+        #self.log_dict({'loss': loss})
         if batch_idx == 0:
             print('First batch first sample outputs:')
             print(self.convert_sample_preds_to_words(preds[0]))
             print('Actual description:')
             print(self.convert_sample_preds_to_words(GO_padded_all[0]))
-        #self.log("loss", loss, prog_bar=True, logger=True, on_step=False, on_epoch=True)
+        self.log("loss", loss)
          
         return {'loss': loss}
     
     def validation_step(self, valid_batch, batch_idx):
         # get greedy decoding of the first couple samples
-        S_padded, S_pad_mask, GO_padded, GO_pad_mask = valid_batch 
-        src_mask, tgt_mask = create_mask(S_padded, GO_padded, device=self.device)
+        S_padded, S_pad_mask, GO_padded_all, GO_pad_mask = valid_batch 
+        GO_padded_input = GO_padded_all[:, :-1]
+        GO_padded_output = GO_padded_all[:, 1:]
+        GO_pad_mask = GO_pad_mask[:, :-1]
+        src_mask, tgt_mask = create_mask(S_padded, GO_padded_input, device=self.device)
 
-        outputs = self(src=S_padded, trg=GO_padded, src_mask=src_mask, 
+        outputs = self(src=S_padded, trg=GO_padded_input, src_mask=src_mask, 
             tgt_mask=tgt_mask, src_padding_mask=S_pad_mask,
             tgt_padding_mask=GO_pad_mask, memory_key_padding_mask=None)
 
-        print(outputs.shape)
-        print(GO_padded.shape)
-        loss = self.loss_fn(outputs, GO_padded)
+        loss = self.loss_fn(outputs, GO_padded_output)
+        loss_dict = {'val_loss': loss}
+        #self.log_dict(loss_dict)
+        self.log('val_loss', loss)
          
-        return {'val_loss': loss}
+        return loss_dict
 
     def test_step(self, test_batch, batch_idx):
         S_padded, S_pad_mask, GO_padded, GO_pad_mask = test_batch 
@@ -254,51 +258,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         acc /= len(preds)
         self.log_dict({'acc': acc})
 
-    '''
-    def predict_step(self, pred_batch, batch_idx):
-        start_symbol = 0 # is this the index of the start token? prob not
-        end_symbol = self.tgt_vocab_size - 1 # is this the index of the end token?
-        if len(pred_batch) == 4:
-            S_padded, S_pad_mask, _, _ = pred_batch
-        num_sets = S_padded.shape[0]
-        GO_padded = [torch.ones((1)).fill_(start_symbol).type(torch.long).to(self.device) for i in range(num_sets)] # start GO description off with start token
 
-        #src_mask, tgt_mask = create_mask(S_padded, GO_padded, device=self.device)
-        src_mask = torch.zeros((S_padded.shape[0], S_padded.shape[1], S_padded.shape[2], S_padded.shape[2]), device=self.device).type(torch.bool).to(self.device)
-
-        for seq_set_ind in range(num_sets):
-            #import ipdb; ipdb.set_trace()
-            embedding = self.encode_seq_set(S_padded[seq_set_ind, ...], src_mask[seq_set_ind, ...], S_pad_mask[seq_set_ind, ...])
-            #embedding = embedding.to(self.device)
-
-            curr_GO_padded = GO_padded[seq_set_ind]
-            #ended_desc_mask = torch.zeros(num_sets, dtype=bool)
-            for i in range(self.max_desc_len - 1): # trying to make this batch wise but how do you break the loop for those that have an end symbol produced?
-                #import ipdb; ipdb.set_trace()
-                #memory_mask = torch.zeros(GO_padded.shape[0], memory.shape[0]).to(self.device).type(torch.bool)
-                
-                #import ipdb; ipdb.set_trace()
-                tgt_mask = (generate_square_subsequent_mask(curr_GO_padded.size(0))).to(self.device)
-                #out = self.decode(GO_padded[seq_set_ind,:].unsqueeze(0), embedding, tgt_mask)
-
-                tgt_emb = self.positional_encoding(self.tgt_tok_emb(curr_GO_padded).unsqueeze(0))
-                #out = self.transformer_decoder(tgt_emb, embedding, 
-                #        tgt_mask, None, None, None) # memory key padding is always assumed to be None
-                out = self.transformer_decoder(tgt_emb, embedding, 
-                        None, None, None, None) # memory key padding is always assumed to be None
-                out = out.transpose(1, 2)
-                prob = self.generator(out[:, :, -1])
-                #prob[..., 0] = 0
-                _, next_word = torch.max(prob, dim = -1)
-                curr_GO_padded = torch.cat((curr_GO_padded, next_word), dim=0)
-                next_word = next_word.item()
-
-                if next_word == end_symbol:
-                    break
-            GO_padded[seq_set_ind] = curr_GO_padded
-
-        return GO_padded
-    '''
     def detect_description_duplicates(self, descriptions):
         for i, description_1 in enumerate(descriptions):
             for j, description_2 in enumerate(descriptions):
@@ -308,8 +268,11 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                     return True
         return False
 
-    def predict_step(self, pred_batch, batch_idx):
+
+    def predict_step(self, pred_batch, batch_idx, dataloader_idx=None):
         print('Beam search')
+        print('device:' + str(self.device))
+        assert 'cuda' in str(self.device)
         #import ipdb; ipdb.set_trace()
         beam_width = 5
         start_symbol = 0
@@ -362,20 +325,14 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                         candidates_ended.append(candidate_sentences[beam])
                         log_probs_ended.append(candidate_probs[beam])
                         
-                '''
-                    else: # if it's ended already, zero out the probabilities of next tokens
-                        #import ipdb; ipdb.set_trace()
-                        #top_probs = torch.ones((beam_width)).type_as(prob)*1e-13 # just tiny probabilities for no nans
-                        #top_log_probs = torch.log(top_probs)
-                        #top_log_probs = torch.zeros((beam_width)).type_as(prob)
-                        #curr_log_probs.append(candidate_log_probs[beam] + top_log_probs)
-                        curr_log_probs.append(candidate_probs[beam] + torch.zeros((beam_width)).type_as(prob))
-                        curr_words.append(torch.zeros((beam_width)).type_as(top_words))
-                '''
                 ended_removed = [candidate_sentences[i] for i in keep_inds]
                 candidate_sentences = ended_removed
 
                 next_words = torch.cat(curr_words)
+                
+                #len_penalized_log_probs = [curr_log_probs[i]/len(candidate_sentences[i] for i in range(len(curr_log_probs))]
+                #unended_top_probs, unended_top_word_inds = torch.topk(torch.stack(len_penalized_log_probs).flatten(), beam_width, dim=-1, largest=True)
+
                 unended_top_probs, unended_top_word_inds = torch.topk(torch.stack(curr_log_probs).flatten(), beam_width, dim=-1, largest=True)
                 assert len(next_words) == len(torch.stack(curr_log_probs).flatten())
                 #print(self.convert_sample_preds_to_words(next_words))
@@ -391,12 +348,6 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                     new_candidate_sentence = torch.cat([selected_candidate, second_word.unsqueeze(0)])
                     new_candidate_sentences.append(new_candidate_sentence)
                     new_candidate_probs.append(unended_top_probs[first_word_beam_ind])
-                    '''
-                    else:
-                        #new_candidate_sentences.append(selected_candidate) # just keep the old one
-                        candidates_ended.append(selected_candidate)
-                        log_probs_ended.append(candidate_probs[first_word_beam_ind])
-                    '''
                 
                 # now concatenate the ended candidates and the new candidates, and do a final ranking
                 all_probs = torch.cat((torch.Tensor(new_candidate_probs), torch.Tensor(log_probs_ended)))

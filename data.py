@@ -52,7 +52,7 @@ class SequenceGOCSVDataset(Dataset):
 
 
     """
-    def __init__(self, go_file, num_samples, vocab=None):
+    def __init__(self, go_file, num_samples, vocab=None, include_go=True):
         #id2seq = load_fasta(fasta_fname)
         annot_df = pd.read_csv(go_file, sep='\t')
         prot_seq_rows = annot_df.apply(lambda row: row['Prot-seqs'].split(','), axis=1)
@@ -62,6 +62,8 @@ class SequenceGOCSVDataset(Dataset):
         self.go_terms = np.array(annot_df['GO-term'])
         self.go_names = np.array(annot_df['GO-name'])
         self.go_desc_strings = np.array(annot_df['GO-def'])
+        self.include_go = include_go
+        self.sample = True
         print('Num go terms')
         print(len(self.go_terms))
         tokenizer = get_tokenizer('basic_english') 
@@ -96,15 +98,32 @@ class SequenceGOCSVDataset(Dataset):
         #self.seqs = np.array([seq2onehot(id2seq[prot]) for prot in self.prot_list], dtype=object)
         self.alphabet = CHARS
         self.num_samples = num_samples
-        self.collate_fn = partial(seq_go_collate_pad, seq_set_size=self.num_samples, vocab=self.vocab)
+        self.collate_fn = partial(seq_go_collate_pad, seq_set_size=self.num_samples)
 
     def __getitem__(self, go_term_index):
         #annotated_prot_inds = np.where(self.annot_mat[:, go_term_index])[0]
         annotated_seqs = self.get_annotated_seqs(go_term_index)[0]
-        selected_inds = np.random.choice(np.arange(len(annotated_seqs)), size=self.num_samples)
-        selected_seqs = np.array(annotated_seqs)[selected_inds]
-        
-        return (selected_seqs, self.go_token_ids[go_term_index])
+        if self.num_samples == len(annotated_seqs):
+            selected_inds = np.random.choice(np.arange(len(annotated_seqs)), size=self.num_samples, replace=False)
+        else:
+            selected_inds = np.random.choice(np.arange(len(annotated_seqs)), size=self.num_samples)
+        if self.sample:
+            selected_seqs = np.array(annotated_seqs)[selected_inds]
+        else:
+            selected_seqs = np.array(annotated_seqs)
+        if self.include_go: 
+            return (selected_seqs, self.go_token_ids[go_term_index])
+        else:
+            return (selected_seqs,)
+
+    def set_sample_mode(self, sample_mode):
+        self.sample = sample_mode
+
+    def set_go_mode(self, go_mode):
+        self.include_go = go_mode
+
+    def set_num_samples(self, num_samples):
+        self.num_samples = num_samples
 
     def get_annotated_seqs(self, go_term_index):
         return (self.go2seqs[self.go_terms[go_term_index]],)
@@ -112,7 +131,7 @@ class SequenceGOCSVDataset(Dataset):
     def __len__(self):
         return len(self.go_terms)
 
-def seq_go_collate_pad(batch, seq_set_size=None, vocab=None):
+def seq_go_collate_pad(batch, seq_set_size=None):
     """
     Pads matrices of variable length
     Takes a batch_size-length list of (seq_set_size object numpy arrays, GO_len) tuples and 
