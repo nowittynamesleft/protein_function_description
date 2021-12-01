@@ -318,7 +318,9 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                         out, prob = self.get_next_token_probs(candidate_sentences[beam], embedding)
                         prob = torch.softmax(prob.squeeze(), dim=-1)
                         curr_top_probs, curr_top_words = torch.topk(prob, beam_width, dim=-1, largest=True)
-                        curr_log_probs.append(candidate_probs[beam] + torch.log(curr_top_probs))
+                        # Length penalty
+                        curr_log_probs.append((candidate_probs[beam] + torch.log(curr_top_probs))/len(candidate_sentences[beam]))
+                        #curr_log_probs.append(candidate_probs[beam] + torch.log(curr_top_probs))
                         curr_words.append(curr_top_words)
                         keep_inds.append(beam)
                     else:
@@ -330,9 +332,6 @@ class SeqSet2SeqTransformer(pl.LightningModule):
 
                 next_words = torch.cat(curr_words)
                 
-                #len_penalized_log_probs = [curr_log_probs[i]/len(candidate_sentences[i] for i in range(len(curr_log_probs))]
-                #unended_top_probs, unended_top_word_inds = torch.topk(torch.stack(len_penalized_log_probs).flatten(), beam_width, dim=-1, largest=True)
-
                 unended_top_probs, unended_top_word_inds = torch.topk(torch.stack(curr_log_probs).flatten(), beam_width, dim=-1, largest=True)
                 assert len(next_words) == len(torch.stack(curr_log_probs).flatten())
                 #print(self.convert_sample_preds_to_words(next_words))
