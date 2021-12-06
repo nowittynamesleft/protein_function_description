@@ -274,9 +274,10 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         print('device:' + str(self.device))
         assert 'cuda' in str(self.device)
         #import ipdb; ipdb.set_trace()
-        beam_width = 5
+        beam_width = 25
         start_symbol = 0
         end_symbol = self.tgt_vocab_size - 1
+        t = 1.75
         if len(pred_batch) == 4:
             S_padded, S_pad_mask, actual_GO_padded, _ = pred_batch
         elif len(pred_batch) == 2:
@@ -319,7 +320,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                         prob = torch.softmax(prob.squeeze(), dim=-1)
                         curr_top_probs, curr_top_words = torch.topk(prob, beam_width, dim=-1, largest=True)
                         # Length penalty
-                        curr_log_probs.append((candidate_probs[beam] + torch.log(curr_top_probs))/len(candidate_sentences[beam]))
+                        curr_log_probs.append((candidate_probs[beam] + torch.log(curr_top_probs))/(len(candidate_sentences[beam]))**t)
                         #curr_log_probs.append(candidate_probs[beam] + torch.log(curr_top_probs))
                         curr_words.append(curr_top_words)
                         keep_inds.append(beam)
@@ -346,7 +347,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                     assert selected_candidate[-1] != end_symbol
                     new_candidate_sentence = torch.cat([selected_candidate, second_word.unsqueeze(0)])
                     new_candidate_sentences.append(new_candidate_sentence)
-                    new_candidate_probs.append(unended_top_probs[first_word_beam_ind])
+                    new_candidate_probs.append(unended_top_probs[first_word_beam_ind]*(len(new_candidate_sentence))**t)
                 
                 # now concatenate the ended candidates and the new candidates, and do a final ranking
                 all_probs = torch.cat((torch.Tensor(new_candidate_probs), torch.Tensor(log_probs_ended)))
@@ -364,8 +365,10 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                         break
                     elif sent_ind == len(candidate_sentences) - 1: # if it reached the end without breaking, all candidates end with <EOS>
                         all_candidates_ended = True
+                        candidate_probs = torch.Tensor([candidate_probs[i]/len(candidate_sentences[i]) for i in range(len(candidate_probs))])
             #import ipdb; ipdb.set_trace()
             #print(candidate_log_probs)
+
             top_prob, top_candidate = torch.max(candidate_probs, 0)
             #print('Top log prob: ' + str(top_log_prob))
             GO_padded[seq_set_ind] = candidate_sentences[top_candidate]
