@@ -126,6 +126,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         self.len_convert = LengthConverter()
         self.max_desc_len = 100
         self.vocab = vocab
+        self.tf_prob = 1.0
 
     def convert_batch_preds_to_words(self, batch):
         word_preds = []
@@ -143,6 +144,24 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         ls = torch.max(torch.sum((x_mask == False).float(), dim=1))*torch.ones(x_mask.shape[0], device=self.device) # assuming mask is 0 when sequence should be shown
         return ls
 
+    def scheduled_sampling_MM(self, trg, avg_src_transformed_embed, tgt_mask, tgt_padding_mask, teacher_force=1.0):
+        # Based on description from Mihaylova and Martins 2019
+        # create reference sequence by computing one-by-one the target tokens 
+        #import ipdb; ipdb.set_trace()
+        tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg).unsqueeze(0))
+        outs = self.transformer_decoder(tgt_emb, avg_src_transformed_embed, 
+                tgt_mask, None, tgt_padding_mask, None) # memory key padding is always assumed to be None
+        predicted_tokens = torch.max(self.generator(outs), dim=-1)[1].squeeze(0)
+        pred_tokens_shifted = torch.cat((torch.zeros(1, device=self.device, dtype=torch.long), predicted_tokens[:-1]))
+        truth_or_pred = torch.rand(len(trg)).to(self.device) < teacher_force
+        reference_desc = torch.where(truth_or_pred, trg, pred_tokens_shifted)
+
+        # second decoding based on reference
+        tgt_emb = self.positional_encoding(self.tgt_tok_emb(reference_desc).unsqueeze(0))
+        outs = self.transformer_decoder(tgt_emb, avg_src_transformed_embed, 
+                tgt_mask, None, tgt_padding_mask, None) # memory key padding is always assumed to be None
+        return outs
+    
     def forward(self, src: Tensor, trg: Tensor, src_mask: Tensor,
                 tgt_mask: Tensor, src_padding_mask: Tensor,
                 tgt_padding_mask: Tensor, memory_key_padding_mask: Tensor):
@@ -167,9 +186,10 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             avg_src_transformed_embed = torch.mean(len_trans_embeds, dim=0).unsqueeze(0)
             '''
             #outs = self.decode(trg[i, :], avg_src_transformed_embed, tgt_mask[i,:])
-            tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg[i, :]).unsqueeze(0))
-            outs = self.transformer_decoder(tgt_emb, avg_src_transformed_embed, 
-                    tgt_mask[i, :], None, tgt_padding_mask[i, :].unsqueeze(0), None) # memory key padding is always assumed to be None
+            #tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg[i, :]).unsqueeze(0))
+            #outs = self.transformer_decoder(tgt_emb, avg_src_transformed_embed, 
+            #         tgt_mask[i, :], None, tgt_padding_mask[i, :].unsqueeze(0), None) # memory key padding is always assumed to be None
+            outs = self.scheduled_sampling_MM(trg[i, :], avg_src_transformed_embed, tgt_mask[i, :], tgt_padding_mask[i, :].unsqueeze(0), teacher_force=self.tf_prob)
             outputs.append(self.generator(outs))
             
         outputs = torch.stack(outputs).squeeze(1)
@@ -207,7 +227,11 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             print(self.convert_sample_preds_to_words(preds[0]))
             print('Actual description:')
             print(self.convert_sample_preds_to_words(GO_padded_all[0]))
+            print('Teacher forcing prob:')
+            print(self.tf_prob)
         self.log("loss", loss)
+        if self.tf_prob > 0:
+            self.tf_prob -= 0.000001 # will take 1000000 steps to reach 0
          
         return {'loss': loss}
     

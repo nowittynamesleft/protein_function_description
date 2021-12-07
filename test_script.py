@@ -89,10 +89,8 @@ def predict_all_prots_of_go_term(trainer, model, num_pred_terms, save_prefix, da
     print('One GO term full set')
     if num_pred_terms == -1 or num_pred_terms == len(dataset):
         num_to_predict = len(dataset)
-        outfile = open(save_prefix + '_full_seq_sets_all_preds.txt', 'w')
     else:
         num_to_predict = num_pred_terms
-        outfile = open(save_prefix + '_full_seq_sets_first_' + str(num_pred_terms) + '_preds.txt', 'w')
     print('Number to predict: ' + str(num_to_predict))
     dls = []
     ground_truths = []
@@ -116,7 +114,7 @@ def predict_all_prots_of_go_term(trainer, model, num_pred_terms, save_prefix, da
     else:
         outfile = open(save_prefix + '_full_seq_sets_first_' + str(num_pred_terms) + '_preds.txt', 'w')
     for i, word_pred in enumerate(word_preds):
-        outfile.write('Prediction:\n' + ' '.join(word_pred[0]) + '\nActual description:\n' + ground_truths[i] + '\n')
+        outfile.write('Prediction:\n' + ' '.join(word_pred[0]) + '\nActual description:\n' + ground_truths[i] + '\n\n')
     outfile.close()
 
 
@@ -241,6 +239,8 @@ if __name__ == '__main__':
 
     subset = Subset(x, list(range(num_pred_terms)))
     test_dl = DataLoader(subset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
+    print('Teacher forcing probability after training:')
+    print(model.tf_prob)
     predict_all_prots_of_go_term(trainer, model, num_pred_terms, args.save_prefix, x)
     '''
     predictions = trainer.predict(model, test_dl)
