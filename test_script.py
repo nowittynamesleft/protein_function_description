@@ -13,6 +13,9 @@ import pickle
 from functools import partial
 from sklearn.model_selection import train_test_split
 
+obofile = 'go.obo'
+
+
 def arguments():
     args = argparse.ArgumentParser()
     #args.add_argument('--learning_rate', type=float, default=0.01)
@@ -23,11 +26,16 @@ def arguments():
     args.add_argument('--emb_size', type=int, default=256)
     args.add_argument('--save_prefix', type=str, default='no_save_prefix')
     args.add_argument('--fasta_fname', type=str)
-    args.add_argument('--load_model', type=str, default=None, help='load model to continue training')
-    args.add_argument('--load_model_predict', type=str, default=None, help='load model to predict only')
-    args.add_argument('--num_pred_terms', type=int, default=-1, help='how many descriptions to predict to compare to real go terms')
-    args.add_argument('--test', action='store_true', help='code testing flag, do not save model checkpoints, only train on num_pred_terms GO terms')
-    args.add_argument('--load_vocab', type=str, default=None, help='Load vocab from pickle file instead of assuming all description vocab is included in annot_seq_file')
+    args.add_argument('--load_model', type=str, default=None, 
+            help='load model to continue training')
+    args.add_argument('--load_model_predict', type=str, default=None, 
+            help='load model to predict only')
+    args.add_argument('--num_pred_terms', type=int, default=-1, 
+            help='how many descriptions to predict to compare to real go terms')
+    args.add_argument('--test', action='store_true', 
+            help='code testing flag, do not save model checkpoints, only train on num_pred_terms GO terms')
+    args.add_argument('--load_vocab', type=str, default=None, 
+            help='Load vocab from pickle file instead of assuming all description vocab is included in annot_seq_file')
 
     args = args.parse_args()
     print(args)
@@ -48,6 +56,7 @@ class MetricsCallback(Callback):
         self.metrics['val_loss'].append(trainer.logged_metrics['val_loss'])
 
 def convert_preds_to_words(predictions, vocab):
+    # converts all predictions in a set of batches to words in a num_batches-length list of batch_size-length lists of sentence-length lists of strings
     word_preds = []
     for batch in predictions:
         word_preds.append([])
@@ -57,6 +66,7 @@ def convert_preds_to_words(predictions, vocab):
 
 
 def convert_sample_preds_to_words(predictions, vocab):
+    # converts all predictions in a set of batches to words in a num_batches*batch_size-length list of sentence-length lists of strings
     word_preds = []
     for batch in predictions:
         for sample in batch:
@@ -78,14 +88,12 @@ def get_prot_preds(fasta_file, trainer, model, combined=False):
     return seq_dataset.prot_list, preds
 
     
-def predict_all_prots_of_go_term(trainer, model, num_pred_terms, save_prefix, dataset):
-    # generate predictions for all proteins of a given GO term
+def predict_all_prots_of_go_term(trainer, model, num_pred_terms, save_prefix, dataset, evaluate_probs=False):
+    # generate predictions for all proteins of a given GO term, for all GO terms in the dataset given as the argument
     preds = []
     ground_truth_descs = []
-    #print('All word preds:')
-    #print(word_preds)
-    dataset.set_go_mode(False)
-    dataset.set_sample_mode(False)
+    dataset.set_include_go_mode(evaluate_probs) # do not send the predict_step function the actual GO descriptions if not evaluating probs
+    dataset.set_sample_mode(False) # do not sample proteins for a particular go term; use all of them
     print('One GO term full set')
     if num_pred_terms == -1 or num_pred_terms == len(dataset):
         num_to_predict = len(dataset)
@@ -106,9 +114,27 @@ def predict_all_prots_of_go_term(trainer, model, num_pred_terms, save_prefix, da
             ground_truth_desc = dataset.go_desc_strings[go_term_ind]
             ground_truths.append(ground_truth_desc)
 
-    preds = trainer.predict(model, dls)
-    preds = [pred[0] for pred in preds]
-    word_preds = convert_preds_to_words(preds, dataset.vocab)
+    if evaluate_probs:
+        model.pred_pair_probs = True
+        all_desc_log_probs = trainer.predict(model, dls)
+        all_desc_log_probs = [log_prob[0] for log_prob in all_desc_log_probs]
+        all_desc_probs = torch.exp(torch.cat(all_desc_log_probs))
+        print('Average probability of true GO descriptions:')
+        average_true_desc_prob = sum(all_desc_probs)/len(all_desc_probs)
+        print(average_true_desc_prob)
+        outfile = open(save_prefix + '_full_seq_sets_pair_probabilities.txt', 'w')
+        for i, ground_truth_desc in enumerate(ground_truths):
+            outfile.write('Ground truth description: ' + ground_truth_desc + '\nProbability assigned: ' + str(all_desc_probs[i].item()) + '\n\n')
+        outfile.write('Average probability score of true GO descriptions:\n' + str(average_true_desc_prob.item()))
+        outfile.close()
+        return average_true_desc_prob
+
+    model.pred_pair_probs = False
+    output = trainer.predict(model, dls)
+    preds = [pred[0][0][0] for pred in output]
+    probs = [pred[0][1][0] for pred in output]
+    word_preds = convert_preds_to_words(preds, dataset.vocab) # will be a num_pred_terms-length list of beam_width-length lists of sentence-length lists of words
+
     if num_pred_terms == -1 or num_pred_terms == len(dataset):
         outfile = open(save_prefix + '_full_seq_sets_all_preds.txt', 'w')
     else:
@@ -116,6 +142,7 @@ def predict_all_prots_of_go_term(trainer, model, num_pred_terms, save_prefix, da
     for i, word_pred in enumerate(word_preds):
         outfile.write('Prediction:\n' + ' '.join(word_pred[0]) + '\nActual description:\n' + ground_truths[i] + '\n\n')
     outfile.close()
+
 
 
 def all_combined_fasta_description(model, trainer, fasta_fname, save_prefix):
@@ -141,7 +168,7 @@ def one_by_one_prot_fasta_description(model, fasta_fname, trainer, seq_dataset, 
 
 def single_prot_description(model, annot_seq_file, loaded_vocab, save_prefix, num_pred_terms):
     # generate predictions for each protein one by one in the first num_pred_terms GO terms
-    x = SequenceGOCSVDataset(annot_seq_file, 1, vocab=loaded_vocab)
+    x = SequenceGOCSVDataset(annot_seq_file, obofile, 1, vocab=loaded_vocab)
     total_word_preds = []
     go_term_ind = 0
     included_term_inds = []
@@ -175,6 +202,7 @@ def get_dataloader(dataset, inds, batch_size, collate_fn):
     dl = DataLoader(data, batch_size=batch_size, collate_fn=collate_fn, num_workers=0, pin_memory=True)
     return dl
 
+
 def get_train_val_dataloaders(full_dataset, batch_size, collate_fn, test=False):
     num_samples = len(full_dataset)
     if test:
@@ -192,9 +220,9 @@ if __name__ == '__main__':
     emb_size = args.emb_size
     if args.load_vocab is not None:
         loaded_vocab = pickle.load(open(args.load_vocab, 'rb'))
-        x = SequenceGOCSVDataset(args.annot_seq_file, seq_set_len, vocab=loaded_vocab)
+        x = SequenceGOCSVDataset(args.annot_seq_file, obofile, seq_set_len, vocab=loaded_vocab)
     else:
-        x = SequenceGOCSVDataset(args.annot_seq_file, seq_set_len)
+        x = SequenceGOCSVDataset(args.annot_seq_file, obofile, seq_set_len)
 
     #num_gpus = torch.cuda.device_count()
     num_gpus = 1
@@ -241,7 +269,9 @@ if __name__ == '__main__':
     test_dl = DataLoader(subset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
     print('Teacher forcing probability after training:')
     print(model.tf_prob)
-    predict_all_prots_of_go_term(trainer, model, num_pred_terms, args.save_prefix, x)
+    average_true_desc_prob = predict_all_prots_of_go_term(trainer, model, num_pred_terms, args.save_prefix, x, evaluate_probs=True)
+    
+
     '''
     predictions = trainer.predict(model, test_dl)
     

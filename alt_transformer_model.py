@@ -127,6 +127,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         self.max_desc_len = 100
         self.vocab = vocab
         self.tf_prob = 1.0
+        self.pred_pair_probs = False
 
     def convert_batch_preds_to_words(self, batch):
         word_preds = []
@@ -143,6 +144,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
     def _max_lens(self, x_mask):
         ls = torch.max(torch.sum((x_mask == False).float(), dim=1))*torch.ones(x_mask.shape[0], device=self.device) # assuming mask is 0 when sequence should be shown
         return ls
+
 
     def scheduled_sampling_MM(self, trg, avg_src_transformed_embed, tgt_mask, tgt_padding_mask, teacher_force=1.0):
         # Based on description from Mihaylova and Martins 2019
@@ -196,6 +198,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         outputs = outputs.transpose(1,2)
         return outputs
 
+
     def encode_seq_set(self, src, src_mask, src_padding_mask):
         #import ipdb; ipdb.set_trace()
         transformed_embeds = torch.cat([self.encode(src[j, :].unsqueeze(0), src_mask[j, :], src_padding_mask[j, :].unsqueeze(0)) for j in range(src.shape[0])])
@@ -203,6 +206,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         # len convert expects src_padding_mask to be all positions that HAVE tokens, so it is inverted here.
         avg_src_transformed_embed = torch.mean(len_trans_embeds, dim=0).unsqueeze(0)
         return avg_src_transformed_embed
+
 
     def training_step(self, train_batch, batch_idx):
         S_padded, S_pad_mask, GO_padded_all, GO_pad_mask = train_batch 
@@ -293,7 +297,39 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         return False
 
 
-    def predict_step(self, pred_batch, batch_idx, dataloader_idx=None):
+    def get_seq_set_desc_pair_probs(self, pred_batch):
+        assert 'cuda' in str(self.device)
+        start_symbol = 0
+        end_symbol = self.tgt_vocab_size
+        S_padded, S_pad_mask, actual_GO_padded, _ = pred_batch
+        src_mask = torch.zeros((S_padded.shape[0], S_padded.shape[1], S_padded.shape[2], S_padded.shape[2]), device=self.device).type(torch.bool).to(self.device)
+        num_sets = S_padded.shape[0]
+        GO_padded = [torch.ones((1)).fill_(start_symbol).type(torch.long).to(self.device) for i in range(num_sets)] # start GO description off with start token
+        
+        desc_probs = []
+        for seq_set_ind in range(num_sets):
+            #print(str(seq_set_ind) + ' out of ' + str(num_sets) + ' sequence sets.')
+            embedding = self.encode_seq_set(S_padded[seq_set_ind, ...], src_mask[seq_set_ind, ...], S_pad_mask[seq_set_ind, ...])
+            curr_GO_padded = GO_padded[seq_set_ind]
+            curr_actual_GO_padded = actual_GO_padded[seq_set_ind][1:]
+
+            # init candidate sentences
+            desc_log_prob = 0
+
+            for position, token in enumerate(curr_actual_GO_padded):
+                out, prob = self.get_next_token_probs(curr_GO_padded, embedding)
+                prob = torch.softmax(prob.squeeze(), dim=-1)
+                desc_log_prob += torch.log(prob[token])
+                curr_GO_padded = curr_actual_GO_padded[:position + 1]
+
+            desc_probs.append(desc_log_prob/len(curr_GO_padded))
+
+        desc_probs = torch.Tensor(desc_probs)
+
+        return desc_probs
+
+
+    def beam_search(self, pred_batch):
         print('Beam search')
         print('device:' + str(self.device))
         assert 'cuda' in str(self.device)
@@ -310,6 +346,8 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         GO_padded = [torch.ones((1)).fill_(start_symbol).type(torch.long).to(self.device) for i in range(num_sets)] # start GO description off with start token
 
         src_mask = torch.zeros((S_padded.shape[0], S_padded.shape[1], S_padded.shape[2], S_padded.shape[2]), device=self.device).type(torch.bool).to(self.device)
+        all_final_candidate_sentences = []
+        all_final_candidate_probs = []
 
         for seq_set_ind in range(num_sets):
             #import ipdb; ipdb.set_trace()
@@ -322,7 +360,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             candidate_sentences = [curr_GO_padded for i in range(beam_width)] # init with <SOS> token 
             init_top_probs, init_top_words = torch.topk(prob, beam_width, dim=-1, largest=True)
 
-            candidate_probs = init_top_probs
+            candidate_probs = torch.log(init_top_probs)
             for beam in range(beam_width):
                 candidate_sentences[beam] = torch.cat([candidate_sentences[beam], init_top_words[beam].unsqueeze(0)])
 
@@ -393,17 +431,30 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             #import ipdb; ipdb.set_trace()
             #print(candidate_log_probs)
 
-            top_prob, top_candidate = torch.max(candidate_probs, 0)
-            #print('Top log prob: ' + str(top_log_prob))
-            GO_padded[seq_set_ind] = candidate_sentences[top_candidate]
+            #top_prob, top_candidate = torch.max(candidate_probs, 0)
+            #GO_padded[seq_set_ind] = candidate_sentences[top_candidate]
+            #import ipdb; ipdb.set_trace()
+            #print('Top candidate: ')
+            #print(' '.join(self.convert_sample_preds_to_words(candidate_sentences[top_candidate])))
+            candidate_sentences = [sent for _, sent in sorted(zip(candidate_probs, candidate_sentences), key=lambda pair: pair[0], reverse=True)]
             print('Top candidate: ')
-            print(' '.join(self.convert_sample_preds_to_words(candidate_sentences[top_candidate])))
+            print(' '.join(self.convert_sample_preds_to_words(candidate_sentences[0])))
+            all_final_candidate_sentences.append(candidate_sentences)
+            all_final_candidate_probs.append(sorted(candidate_probs, reverse=True))
+            
             #print('All candidates:')
             #print(self.convert_batch_preds_to_words(candidate_sentences))
             if len(pred_batch) == 4: # if the actual description was supplied in the batch to compare
                 print('Actual description:')
                 print(' '.join(self.convert_sample_preds_to_words(actual_GO_padded[seq_set_ind])))
-        return GO_padded
+        #return GO_padded
+        return all_final_candidate_sentences, all_final_candidate_probs
+
+    def predict_step(self, pred_batch, batch_idx, dataloader_idx=None):
+        if self.pred_pair_probs:
+            return self.get_seq_set_desc_pair_probs(pred_batch)
+        else:
+            return self.beam_search(pred_batch)
 
 
     def get_next_token_probs(self, curr_GO_padded, embedding):

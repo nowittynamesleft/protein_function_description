@@ -12,6 +12,8 @@ import itertools
 from sklearn.preprocessing import OneHotEncoder, LabelEncoder
 from functools import partial
 import pandas as pd
+import obonet
+import networkx as nx
 
 
 CHARS = ['R', 'X', 'S', 'G', 'W', 'I', 'Q', 'A', 'T', 'V', 'K', 'Y', 'C', 'N', 'L', 'F', 'D', 'M', 'P', 'H', 'E', 'U', 'O', 'B', 'Z', '-']
@@ -52,7 +54,7 @@ class SequenceGOCSVDataset(Dataset):
 
 
     """
-    def __init__(self, go_file, num_samples, vocab=None, include_go=True):
+    def __init__(self, go_file, obo_file, num_samples, vocab=None, include_go=True):
         #id2seq = load_fasta(fasta_fname)
         annot_df = pd.read_csv(go_file, sep='\t')
         prot_seq_rows = annot_df.apply(lambda row: row['Prot-seqs'].split(','), axis=1)
@@ -60,6 +62,22 @@ class SequenceGOCSVDataset(Dataset):
         self.go2seqs = dict(zip(annot_df['GO-term'], prot_seq_rows))
 
         self.go_terms = np.array(annot_df['GO-term'])
+        graph = obonet.read_obo(obo_file)
+        id_to_depth_mf = dict(nx.single_target_shortest_path_length(graph, 'GO:0003674'))
+        id_to_depth_bp = dict(nx.single_target_shortest_path_length(graph, 'GO:0008150'))
+        id_to_depth_cc = dict(nx.single_target_shortest_path_length(graph, 'GO:0005575'))
+        self.depths_of_go_terms = {}
+        for go_term in self.go_terms:
+            if go_term in id_to_depth_mf:
+                self.depths_of_go_terms[go_term] = id_to_depth_mf[go_term]
+            elif go_term in id_to_depth_bp:
+                self.depths_of_go_terms[go_term] = id_to_depth_bp[go_term]
+            elif go_term in id_to_depth_cc:
+                self.depths_of_go_terms[go_term] = id_to_depth_cc[go_term]
+            else:
+                print(go_term + ' NOT FOUND IN OBO')
+
+
         self.go_names = np.array(annot_df['GO-name'])
         self.go_desc_strings = np.array(annot_df['GO-def'])
         self.include_go = include_go
@@ -119,7 +137,7 @@ class SequenceGOCSVDataset(Dataset):
     def set_sample_mode(self, sample_mode):
         self.sample = sample_mode
 
-    def set_go_mode(self, go_mode):
+    def set_include_go_mode(self, go_mode):
         self.include_go = go_mode
 
     def set_num_samples(self, num_samples):
