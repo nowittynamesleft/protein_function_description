@@ -149,6 +149,7 @@ class SequenceGOCSVDataset(Dataset):
     def __len__(self):
         return len(self.go_terms)
 
+
 def seq_go_collate_pad(batch, seq_set_size=None):
     """
     Pads matrices of variable length
@@ -228,6 +229,18 @@ def seq_go_collate_pad(batch, seq_set_size=None):
         return S_padded, S_mask, GO_padded, GO_mask
     else:
         return S_padded, S_mask
+
+
+def pad_GO(go_descs):
+    go_desc_lengths = [len(desc) for desc in go_descs]
+    GO_mask = torch.ones(len(batch), max(go_desc_lengths), dtype=bool)
+    for i in range(len(batch)):
+        curr_go_desc = go_descs[i]
+        curr_go_desc_length = go_desc_lengths[i]
+        GO_mask[i, :curr_go_desc_length] = False
+        for j, word in enumerate(curr_go_desc):
+            GO_padded[i, j] = word
+    return GO_padded, GO_mask
 
 
 class SequenceKeywordDataset(Dataset):

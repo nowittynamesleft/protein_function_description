@@ -144,7 +144,6 @@ def predict_all_prots_of_go_term(trainer, model, num_pred_terms, save_prefix, da
     outfile.close()
 
 
-
 def all_combined_fasta_description(model, trainer, fasta_fname, save_prefix):
     # generate predictions for all proteins in a fasta
     prot_ids, prot_preds = get_prot_preds(fasta_fname, trainer, model, combined=True)
@@ -269,33 +268,8 @@ if __name__ == '__main__':
     test_dl = DataLoader(subset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
     print('Teacher forcing probability after training:')
     print(model.tf_prob)
-    average_true_desc_prob = predict_all_prots_of_go_term(trainer, model, num_pred_terms, args.save_prefix, x, evaluate_probs=True)
+    #average_true_desc_prob = predict_all_prots_of_go_term(trainer, model, num_pred_terms, args.save_prefix, x, evaluate_probs=True)
+    
+    probs = model.classify_set(
     
 
-    '''
-    predictions = trainer.predict(model, test_dl)
-    
-    #predictions = torch.stack(predictions, dim=0)
-#print('Predictions')
-#print(predictions) # this is num_batches x num_samples_per_batch x num_seqs_per_set_sample x max_desc_len, need to be num_batches x num_samples_per_batch x max_desc_len
-    word_preds = convert_sample_preds_to_words(predictions, x.vocab)
-    print('Number of word preds:')
-    print(len(word_preds))
-    #assert len(word_preds) == args.num_pred_terms
-#acc = trainer.test(model, test_dl, verbose=True)[0]['acc']
-#print('Exact match accuracy')
-#print(acc)
-                
-    print('Preds (should be one description):')
-    print(word_preds[0])
-    print('Actual description:')
-    print(x.go_descriptions[0]) # assumes subset is from the first N samples of the training set
-
-    outfile = open(args.save_prefix + 'first_' + str(args.num_pred_terms) + '_preds.txt', 'w')
-    #import ipdb; ipdb.set_trace()
-    #print('All word preds:')
-    #print(word_preds)
-    for i in range(args.num_pred_terms):
-        outfile.write('Prediction:\n' + ' '.join(word_preds[i]) + '\nActual description:\n' + ' '.join(x.go_descriptions[i]) + '\n')
-    outfile.close()
-    '''
