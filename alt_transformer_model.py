@@ -313,7 +313,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
 
             embedding = self.encode_seq_set(S_padded[seq_set_ind, ...], 
                     src_mask[seq_set_ind, ...], S_pad_mask[seq_set_ind, ...])
-            desc_log_prob = self.get_single_set_desc_pair_probs(self, embedding, curr_actual_GO_padded)
+            desc_log_prob = self.get_single_seq_set_desc_pair_probs(embedding, curr_actual_GO_padded)
 
             desc_probs.append(desc_log_prob)
 
@@ -324,27 +324,28 @@ class SeqSet2SeqTransformer(pl.LightningModule):
 
     def get_single_seq_set_desc_pair_probs(self, embedding, actual_GO_padded):
         # given sequence set embedding and GO description, calculate probability model assigns to the sequence with length penalty
+        start_symbol = 0
+        end_symbol = self.tgt_vocab_size - 1
         curr_GO_padded = torch.ones((1)).fill_(start_symbol).type(torch.long).to(self.device) # start GO description off with start token
         desc_log_prob = 0
-
-        for position, token in enumerate(curr_actual_GO_padded):
+        for position, token in enumerate(actual_GO_padded):
             out, prob = self.get_next_token_probs(curr_GO_padded, embedding)
             prob = torch.softmax(prob.squeeze(), dim=-1)
             desc_log_prob += torch.log(prob[token])
-            curr_GO_padded = curr_actual_GO_padded[:position + 1]
+            curr_GO_padded = actual_GO_padded[:position + 1]
 
         desc_log_prob /= len(curr_GO_padded) # length penalty, no parameter for now
         
-        return desc_log_prob
+        return torch.exp(desc_log_prob).item()
 
 
-    def classify_seq_set(self, embedding, all_GO_padded):
+    def classify_seq_set(self, S_padded, src_mask, S_pad_mask, all_GO_padded):
         probs = []
-        embedding = embedding.to(self.device)
+        embedding = self.encode_seq_set(S_padded.to(self.device), 
+                src_mask.to(self.device), S_pad_mask.to(self.device))
         for GO_padded in all_GO_padded:
             GO_padded = GO_padded.to(self.device)
-            probs.append(self.get_single_seq_set_desc_pair_probs(self, 
-                embedding, GO_padded)
+            probs.append(self.get_single_seq_set_desc_pair_probs(embedding, GO_padded))
         return probs
 
 
@@ -364,7 +365,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         num_sets = S_padded.shape[0]
         GO_padded = [torch.ones((1)).fill_(start_symbol).type(torch.long).to(self.device) for i in range(num_sets)] # start GO description off with start token
 
-        src_mask = torch.zeros((S_padded.shape[0], S_padded.shape[1], S_padded.shape[2], S_padded.shape[2]), device=self.device).type(torch.bool).to(self.device)
+        src_mask = torch.zeros((S_padded.shape[0], S_padded.shape[1], S_padded.shape[2], S_padded.shape[2]), device=self.device).type(torch.bool)
         all_final_candidate_sentences = []
         all_final_candidate_probs = []
 

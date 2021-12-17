@@ -55,11 +55,13 @@ class SequenceGOCSVDataset(Dataset):
 
     """
     def __init__(self, go_file, obo_file, num_samples, vocab=None, include_go=True):
-        #id2seq = load_fasta(fasta_fname)
         annot_df = pd.read_csv(go_file, sep='\t')
         prot_seq_rows = annot_df.apply(lambda row: row['Prot-seqs'].split(','), axis=1)
         prot_seq_rows = [[seq2AAinds(prot) for prot in prot_seq_row] for prot_seq_row in prot_seq_rows]
         self.go2seqs = dict(zip(annot_df['GO-term'], prot_seq_rows))
+        self.prot_lists = [prots.split(',') for prots in annot_df['Prot-names']]
+        self.go2prot_ids = dict(zip(annot_df['GO-term'], self.prot_lists))
+        #self.total_prot_set = set(prot for prot_list in prot_lists for prot in prot_list)
 
         self.go_terms = np.array(annot_df['GO-term'])
         graph = obonet.read_obo(obo_file)
@@ -96,30 +98,19 @@ class SequenceGOCSVDataset(Dataset):
         for token_list in tokenized:
             token_list.insert(0, '<SOS>')
             token_list.append('<EOS>')
-            #print(token_list)
         word_to_id = {token: idx for idx, token in enumerate(self.vocab)}
         print('<SOS> and <EOS> token numbers:')
         print(word_to_id['<SOS>'])
         print(word_to_id['<EOS>'])
         token_ids = [[word_to_id[token] for token in tokens_doc if token in word_to_id] for tokens_doc in tokenized] # remove unknown tokens
-        '''
-        one_hot_docs = [np.zeros((len(doc), len(self.vocab))) for doc in token_ids]
-        for i, doc in enumerate(token_ids):
-            for token_id in enumerate(doc):
-                one_hot_docs[i][token_id] = 1
-        '''
         self.go_descriptions = tokenized
         self.go_token_ids = token_ids
-        #self.device = device
         
-        self.prot_lists = [prots.split(',') for prots in annot_df['Prot-names']]
-        #self.seqs = np.array([seq2onehot(id2seq[prot]) for prot in self.prot_list], dtype=object)
         self.alphabet = CHARS
         self.num_samples = num_samples
         self.collate_fn = partial(seq_go_collate_pad, seq_set_size=self.num_samples)
 
     def __getitem__(self, go_term_index):
-        #annotated_prot_inds = np.where(self.annot_mat[:, go_term_index])[0]
         annotated_seqs = self.get_annotated_seqs(go_term_index)[0]
         if self.num_samples == len(annotated_seqs):
             selected_inds = np.random.choice(np.arange(len(annotated_seqs)), size=self.num_samples, replace=False)
@@ -145,6 +136,9 @@ class SequenceGOCSVDataset(Dataset):
 
     def get_annotated_seqs(self, go_term_index):
         return (self.go2seqs[self.go_terms[go_term_index]],)
+
+    def get_padded_descs(self):
+        return pad_GO(self.go_token_ids)
 
     def __len__(self):
         return len(self.go_terms)
@@ -212,29 +206,22 @@ def seq_go_collate_pad(batch, seq_set_size=None):
         
     # handle GO descriptions. Pad max length of the GO description?
     if GO_present:
-        GO_padded = torch.zeros((len(batch), max_go_desc_length), dtype=torch.long)
     #GO_padded[:, :] = len(vocab) # padding token is last
 
         batch_go_descs = [torch.from_numpy(np.array(go_desc)) for (_, go_desc) in batch]
-        batch_go_desc_lengths = [len(desc) for desc in batch_go_descs]
-        GO_mask = torch.ones(len(batch), max_go_desc_length, dtype=bool)
-        for i in range(len(batch)):
-            curr_go_desc = batch_go_descs[i]
-            curr_go_desc_length = batch_go_desc_lengths[i]
-            GO_mask[i, :curr_go_desc_length] = False
-            for j, word in enumerate(curr_go_desc):
-                GO_padded[i, j] = word
+        GO_padded, GO_mask = pad_GO(batch_go_descs)
 
-        #return S_padded.to(device), S_mask.to(device), GO_padded.to(device), GO_mask.to(device)
         return S_padded, S_mask, GO_padded, GO_mask
     else:
         return S_padded, S_mask
 
 
 def pad_GO(go_descs):
+    # takes tokenized GO descriptions and pads them to max of the list of descriptions
     go_desc_lengths = [len(desc) for desc in go_descs]
-    GO_mask = torch.ones(len(batch), max(go_desc_lengths), dtype=bool)
-    for i in range(len(batch)):
+    GO_padded = torch.zeros((len(go_descs), max(go_desc_lengths)), dtype=torch.long)
+    GO_mask = torch.ones(len(go_descs), max(go_desc_lengths), dtype=bool)
+    for i in range(len(go_descs)):
         curr_go_desc = go_descs[i]
         curr_go_desc_length = go_desc_lengths[i]
         GO_mask[i, :curr_go_desc_length] = False
