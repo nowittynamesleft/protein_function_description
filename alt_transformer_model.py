@@ -108,7 +108,8 @@ class LengthConverter(pl.LightningModule):
 class SeqSet2SeqTransformer(pl.LightningModule):
     def __init__(self, num_encoder_layers: int, num_decoder_layers: int,
                  emb_size: int, src_vocab_size: int, tgt_vocab_size: int,
-                 dim_feedforward:int = 512, num_heads: int = 1, dropout:float = 0.1, vocab=None):
+                 dim_feedforward:int = 512, num_heads: int = 1, dropout:float = 0.1, vocab=None,
+                 min_tf_prob=1.0):
         super(SeqSet2SeqTransformer, self).__init__()
         encoder_layer = TransformerEncoderLayer(d_model=emb_size, nhead=num_heads,
                                                 dim_feedforward=dim_feedforward, batch_first=True)
@@ -127,6 +128,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         self.max_desc_len = 100
         self.vocab = vocab
         self.tf_prob = 1.0
+        self.min_tf_prob = min_tf_prob # default is 1.0, so all teacher forcing; no decrease in ground truth sample probability
         self.pred_pair_probs = False
 
     def convert_batch_preds_to_words(self, batch):
@@ -177,7 +179,6 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         for i in range(src.shape[0]): # seq set in batch
             #import ipdb; ipdb.set_trace()
 
-            avg_src_transformed_embed = self.encode_seq_set(src[i, ...], src_mask[i, ...], src_padding_mask[i, ...])
             '''
             src_emb = self.positional_encoding(self.src_tok_emb(src[i, :, :]))
             print(src_emb.shape)
@@ -187,6 +188,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
 
             avg_src_transformed_embed = torch.mean(len_trans_embeds, dim=0).unsqueeze(0)
             '''
+            avg_src_transformed_embed = self.encode_seq_set(src[i, ...], src_mask[i, ...], src_padding_mask[i, ...])
             #outs = self.decode(trg[i, :], avg_src_transformed_embed, tgt_mask[i,:])
             #tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg[i, :]).unsqueeze(0))
             #outs = self.transformer_decoder(tgt_emb, avg_src_transformed_embed, 
@@ -234,8 +236,8 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             print('Teacher forcing prob:')
             print(self.tf_prob)
         self.log("loss", loss)
-        if self.tf_prob > 0:
-            self.tf_prob -= 0.000001 # will take 1000000 steps to reach 0
+        if self.tf_prob > self.min_tf_prob:
+            self.tf_prob -= 0.000001 # will take 1,000,000 steps to reach 0
          
         return {'loss': loss}
     
@@ -302,18 +304,23 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         assert 'cuda' in str(self.device)
         start_symbol = 0
         end_symbol = self.tgt_vocab_size
-        S_padded, S_pad_mask, actual_GO_padded, _ = pred_batch
-        src_mask = torch.zeros((S_padded.shape[0], S_padded.shape[1], S_padded.shape[2], S_padded.shape[2]), device=self.device).type(torch.bool).to(self.device)
+        S_padded, S_pad_mask, actual_GO_padded_all, GO_pad_mask = pred_batch
+        actual_GO_padded_input = actual_GO_padded_all[:, :-1]
+        actual_GO_padded_output = actual_GO_padded_all[:, 1:]
+        GO_pad_mask = GO_pad_mask[:, :-1]
+        #import ipdb; ipdb.set_trace()
+        src_mask, tgt_mask = create_mask(S_padded, actual_GO_padded_input, device=self.device)
+
         num_sets = S_padded.shape[0]
         
         desc_probs = []
         for seq_set_ind in range(num_sets):
             #print(str(seq_set_ind) + ' out of ' + str(num_sets) + ' sequence sets.')
-            curr_actual_GO_padded = actual_GO_padded[seq_set_ind][1:]
+            curr_actual_GO_padded = actual_GO_padded[seq_set_ind]
 
             embedding = self.encode_seq_set(S_padded[seq_set_ind, ...], 
                     src_mask[seq_set_ind, ...], S_pad_mask[seq_set_ind, ...])
-            desc_log_prob = self.get_single_seq_set_desc_pair_probs(embedding, curr_actual_GO_padded)
+            desc_log_prob = self.get_single_seq_set_desc_pair_probs(embedding, curr_actual_GO_padded, tgt_mask, GO_pad_mask)
 
             desc_probs.append(desc_log_prob)
 
@@ -322,30 +329,46 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         return desc_probs
 
 
-    def get_single_seq_set_desc_pair_probs(self, embedding, actual_GO_padded):
+    def get_single_seq_set_desc_pair_probs(self, embedding, actual_GO_padded, GO_mask, GO_pad_mask):
         # given sequence set embedding and GO description, calculate probability model assigns to the sequence with length penalty
         start_symbol = 0
         end_symbol = self.tgt_vocab_size - 1
-        curr_GO_padded = torch.ones((1)).fill_(start_symbol).type(torch.long).to(self.device) # start GO description off with start token
         desc_log_prob = 0
-        for position, token in enumerate(actual_GO_padded):
+
+        tgt_emb = self.positional_encoding(self.tgt_tok_emb(actual_GO_padded).unsqueeze(0))
+        outputs = self.transformer_decoder(tgt_emb, embedding, 
+                 GO_mask, None, GO_pad_mask.unsqueeze(0), None) # memory key padding is always assumed to be None
+        #outs = self.scheduled_sampling_MM(trg[i, :], avg_src_transformed_embed, tgt_mask[i, :], tgt_padding_mask[i, :].unsqueeze(0), teacher_force=self.tf_prob)
+            
+        probs = self.generator(outputs).squeeze()
+        considered_probs = probs[~GO_pad_mask]
+        correct_tokens = actual_GO_padded[~GO_pad_mask]
+        correct_token_probs = torch.stack([considered_probs[position, correct_tokens[position]] for position in range(correct_tokens.shape[0])])
+        desc_log_prob = torch.sum(correct_token_probs, dim=-1)
+
+        desc_log_prob /= len(correct_tokens) # length penalty, no parameter for now
+
+        '''
+        for position, token in enumerate(actual_GO_padded): # this doesn't need to be sequential
             out, prob = self.get_next_token_probs(curr_GO_padded, embedding)
             prob = torch.softmax(prob.squeeze(), dim=-1)
             desc_log_prob += torch.log(prob[token])
             curr_GO_padded = actual_GO_padded[:position + 1]
+        '''
 
-        desc_log_prob /= len(curr_GO_padded) # length penalty, no parameter for now
         
         return torch.exp(desc_log_prob).item()
 
 
-    def classify_seq_set(self, S_padded, src_mask, S_pad_mask, all_GO_padded):
+    def classify_seq_set(self, S_padded, S_pad_mask, all_GO_padded, GO_pad_mask):
         probs = []
-        embedding = self.encode_seq_set(S_padded.to(self.device), 
-                src_mask.to(self.device), S_pad_mask.to(self.device))
-        for GO_padded in all_GO_padded:
-            GO_padded = GO_padded.to(self.device)
-            probs.append(self.get_single_seq_set_desc_pair_probs(embedding, GO_padded))
+        src_mask, tgt_mask = create_mask(S_padded, all_GO_padded, device=self.device)
+        #import ipdb; ipdb.set_trace()
+        embedding = self.encode_seq_set(S_padded[0].to(self.device), 
+                src_mask[0].to(self.device), S_pad_mask[0].to(self.device))
+        for go_ind in range(all_GO_padded.shape[0]):
+            curr_GO_padded = all_GO_padded[go_ind].to(self.device)
+            probs.append(self.get_single_seq_set_desc_pair_probs(embedding, curr_GO_padded, tgt_mask[go_ind].to(self.device), GO_pad_mask[go_ind].to(self.device)))
         return probs
 
 
@@ -487,7 +510,6 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         prob = self.generator(out[:, :, -1])
         return out, prob
 
-    '''
     def greedy_decode(model, src, src_mask, max_len, start_symbol):
         src = src.to(device)
         src_mask = src_mask.to(device)
@@ -510,7 +532,6 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             if next_word == EOS_IDX:
               break
         return ys
-    '''
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
@@ -537,7 +558,7 @@ def create_mask(src, tgt, device=None):
     # assuming src is a tensor of shape (set_size, max_set_len)
     src_batch_size, src_seq_set_size, src_seq_len = src.shape
     tgt_batch_size, tgt_seq_len = tgt.shape
-    assert src_batch_size == tgt_batch_size
+    #assert src_batch_size == tgt_batch_size
 
     tgt_mask = torch.stack([generate_square_subsequent_mask(tgt_seq_len, device=device) for i in range(tgt_batch_size)])
     src_mask = torch.zeros((src_batch_size, src_seq_set_size, src_seq_len, src_seq_len), device=device).type(torch.bool).to(device)

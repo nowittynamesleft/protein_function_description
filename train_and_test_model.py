@@ -14,6 +14,7 @@ from functools import partial
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 import tqdm
+from utils import accuracy, micro_aupr
 
 obofile = 'go.obo'
 
@@ -22,9 +23,12 @@ def arguments():
     args = argparse.ArgumentParser()
     #args.add_argument('--learning_rate', type=float, default=0.01)
     args.add_argument('annot_seq_file', type=str)
+    args.add_argument('--test_annot_seq_file', type=str, default=None)
     args.add_argument('--epochs', type=int, default=10)
     args.add_argument('--batch_size', type=int, default=1)
     args.add_argument('--seq_set_len', type=int, default=32)
+    args.add_argument('--min_tf_prob', type=float, default=1.0, 
+            help='Minimum teacher forcing prob (for scheduled sampling). Default is 1.0, so all teacher forcing.')
     args.add_argument('--emb_size', type=int, default=256)
     args.add_argument('--save_prefix', type=str, default='no_save_prefix')
     args.add_argument('--fasta_fname', type=str)
@@ -42,63 +46,6 @@ def arguments():
     args = args.parse_args()
     print(args)
     return args
-
-
-def accuracy(output: torch.Tensor, target: torch.Tensor, topk=(1,)):
-    """
-    Computes the accuracy over the k top predictions for the specified values of k
-    In top-5 accuracy you give yourself credit for having the right answer
-    if the right answer appears in your top five guesses.
-
-    ref:
-    - https://pytorch.org/docs/stable/generated/torch.topk.html
-    - https://discuss.pytorch.org/t/imagenet-example-accuracy-calculation/7840
-    - https://gist.github.com/weiaicunzai/2a5ae6eac6712c70bde0630f3e76b77b
-    - https://discuss.pytorch.org/t/top-k-error-calculation/48815/2
-    - https://stackoverflow.com/questions/59474987/how-to-get-top-k-accuracy-in-semantic-segmentation-using-pytorch
-
-    :param output: output is the prediction of the model e.g. scores, logits, raw y_pred before normalization or getting classes
-    :param target: target is the truth
-    :param topk: tuple of topk's to compute e.g. (1, 2, 5) computes top 1, top 2 and top 5.
-    e.g. in top 2 it means you get a +1 if your models's top 2 predictions are in the right label.
-    So if your model predicts cat, dog (0, 1) and the true label was bird (3) you get zero
-    but if it were either cat or dog you'd accumulate +1 for that example.
-    :return: list of topk accuracy [top1st, top2nd, ...] depending on your topk input
-    """
-    with torch.no_grad():
-        # ---- get the topk most likely labels according to your model
-        # get the largest k \in [n_classes] (i.e. the number of most likely probabilities we will use)
-        maxk = max(topk)  # max number labels we will consider in the right choices for out model
-        batch_size = target.size(0)
-
-        # get top maxk indicies that correspond to the most likely probability scores
-        # (note _ means we don't care about the actual top maxk scores just their corresponding indicies/labels)
-        _, y_pred = output.topk(k=maxk, dim=1)  # _, [B, n_classes] -> [B, maxk]
-        y_pred = y_pred.t()  # [B, maxk] -> [maxk, B] Expects input to be <= 2-D tensor and transposes dimensions 0 and 1.
-
-        # - get the credit for each example if the models predictions is in maxk values (main crux of code)
-        # for any example, the model will get credit if it's prediction matches the ground truth
-        # for each example we compare if the model's best prediction matches the truth. If yes we get an entry of 1.
-        # if the k'th top answer of the model matches the truth we get 1.
-        # Note: this for any example in batch we can only ever get 1 match (so we never overestimate accuracy <1)
-        target_reshaped = target.view(1, -1).expand_as(y_pred)  # [B] -> [B, 1] -> [maxk, B]
-        # compare every topk's model prediction with the ground truth & give credit if any matches the ground truth
-        correct = (y_pred == target_reshaped)  # [maxk, B] were for each example we know which topk prediction matched truth
-        # original: correct = pred.eq(target.view(1, -1).expand_as(pred))
-
-        # -- get topk accuracy
-        list_topk_accs = []  # idx is topk1, topk2, ... etc
-        for k in topk:
-            # get tensor of which topk answer was right
-            ind_which_topk_matched_truth = correct[:k]  # [maxk, B] -> [k, B]
-            # flatten it to help compute if we got it correct for each example in batch
-            flattened_indicator_which_topk_matched_truth = ind_which_topk_matched_truth.reshape(-1).float()  # [k, B] -> [kB]
-            # get if we got it right for any of our top k prediction for each example in batch
-            tot_correct_topk = flattened_indicator_which_topk_matched_truth.float().sum(dim=0, keepdim=True)  # [kB] -> [1]
-            # compute topk accuracy - the accuracy of the mode's ability to get it right within it's top k guesses/preds
-            topk_acc = tot_correct_topk / batch_size  # topk accuracy for entire batch
-            list_topk_accs.append(topk_acc)
-        return list_topk_accs  # list of topk accuracies for entire batch [topk1, topk2, ... etc]
 
 
 class MetricsCallback(Callback):
@@ -262,30 +209,35 @@ def single_prot_description(model, annot_seq_file, loaded_vocab, save_prefix, nu
     outfile.close()
 
 
-def train_test_classification(model, train_dataset, test_dataset=None):
+def classification(model, dataset, save_prefix='no_prefix'):
     # extract each seq set, compute all pairs of probabilities
-    train_GO_padded, train_GO_pad_masks = train_dataset.get_padded_descs()
-    train_dataset.set_include_go_mode = False
-    train_dataloaders, _, included_go_inds = get_individual_go_term_dataloaders(train_dataset, len(train_dataset))
+    GO_padded, GO_pad_masks = dataset.get_padded_descs()
+    dataset.set_include_go_mode = False
+    dataloaders, _, included_go_inds = get_individual_go_term_dataloaders(dataset, len(dataset), max_seq_set_size=128) # do somewhat specific ones just to take less time...
     preds = []
     # tqdm progress bar
+    print(str(len(included_go_inds)) + "-way zero-shot classification.")
     for ind in tqdm.tqdm(included_go_inds): # only take the indices of terms that have few enough sequences annotated (to fit in gpu memory)
-        seq_set = train_dataset.get_annotated_seqs(ind)
+        seq_set = dataset.get_annotated_seqs(ind)
         S_padded, S_mask = seq_go_collate_pad([seq_set], seq_set_size=len(seq_set[0]))
         #S_padded = S_padded.to(model.device)
         #S_mask = S_mask.to(model.device)
-        src_mask = torch.zeros((S_padded.shape[0], S_padded.shape[1], S_padded.shape[2], S_padded.shape[2])).type(torch.bool)
-        seq_set_desc_probs = model.classify_seq_set(S_padded[0], src_mask[0], S_mask[0], train_GO_padded) # batch sizes of 1 each, index out of it
-        preds.append(seq_set_desc_probs)
+        seq_set_desc_log_probs = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks) # batch sizes of 1 each, index out of it
+        preds.append(seq_set_desc_log_probs)
         #preds.append(seq_set_desc_probs)
 
     #acc = accuracy_score(preds, included_go_inds)
-    acc_10, acc_5, acc = accuracy(torch.tensor(preds), torch.tensor(included_go_inds), topk=(10, 5,1))
-    print('Top-10 Training Accuracy ' + str(acc_10))
-    print('Top-5 Training Accuracy ' + str(acc_5))
-    print('Top-1 Training Accuracy ' + str(acc))
+    pred_outdict = {'seq_set_go_term_inds': included_go_inds, 'all_term_preds': preds}
+    pickle.dump(pred_outdict, open(save_prefix + '_pred_dict.pckl', 'wb'))
 
-    return preds, acc
+    accs = accuracy(torch.tensor(preds), torch.tensor(included_go_inds), topk=(1000, 500, 100, 50, 10, 5, 1))
+    print('Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs))
+    #accs = accuracy(torch.tensor(preds), torch.tensor(included_go_inds), topk=(5, 4, 3, 2, 1))
+    #print('Top 5, 4, 3, 2, 1 accuracies: ' + str(accs))
+
+    #aupr = micro_aupr(preds, dataset.go_annot_mat)
+
+    return preds, accs
     
 
 def get_subset_dataloader(dataset, inds, batch_size, collate_fn):
@@ -305,8 +257,20 @@ def get_train_val_dataloaders(full_dataset, batch_size, collate_fn, test=False):
     return train_dl, val_dl
 
 
+def get_train_val_datasets(full_dataset, batch_size, collate_fn, test=False):
+    num_samples = len(full_dataset)
+    if test:
+        num_samples = 10
+
+    train_inds, val_inds = train_test_split(range(0, num_samples))
+    train_data = Subset(dataset, train_inds)
+    val_data = Subset(dataset, val_inds)
+    return train_data, val_data
+
+
 if __name__ == '__main__':
     args = arguments()
+    np.random.seed(973)
     seq_set_len = args.seq_set_len
     emb_size = args.emb_size
     if args.load_vocab is not None:
@@ -327,7 +291,8 @@ if __name__ == '__main__':
 
     model = SeqSet2SeqTransformer(num_encoder_layers=1, num_decoder_layers=1, 
             emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-            dim_feedforward=512, num_heads=4, dropout=0.0, vocab=x.vocab)
+            dim_feedforward=512, num_heads=4, dropout=0.0, vocab=x.vocab, 
+            min_tf_prob=args.min_tf_prob)
 
     print('Vocab size:')
     print(len(x.vocab))
@@ -356,13 +321,15 @@ if __name__ == '__main__':
         ckpt = torch.load(args.load_model_predict)
         model.load_state_dict(ckpt['state_dict'])
 
-    subset = Subset(x, list(range(num_pred_terms)))
-    test_dl = DataLoader(subset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
     print('Teacher forcing probability after training:')
     print(model.tf_prob)
     #average_true_desc_prob = predict_all_prots_of_go_term(trainer, model, num_pred_terms, args.save_prefix, x, evaluate_probs=True)
     model.to('cuda:0')
-    preds, acc = train_test_classification(model, x, test_dataset=None)
+    if args.test_annot_seq_file is None:
+        test_dataset = Subset(x, list(range(num_pred_terms)))
+        #test_dl = DataLoader(subset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
+    else:
+        test_dataset = SequenceGOCSVDataset(args.test_annot_seq_file, obofile, seq_set_len, vocab=x.vocab)
+        #test_dl = DataLoader(subset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
+    preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix)
     
-    
-

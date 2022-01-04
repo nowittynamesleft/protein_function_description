@@ -61,9 +61,11 @@ class SequenceGOCSVDataset(Dataset):
         self.go2seqs = dict(zip(annot_df['GO-term'], prot_seq_rows))
         self.prot_lists = [prots.split(',') for prots in annot_df['Prot-names']]
         self.go2prot_ids = dict(zip(annot_df['GO-term'], self.prot_lists))
-        #self.total_prot_set = set(prot for prot_list in prot_lists for prot in prot_list)
+        self.all_prot_ids = sorted(list(set([prot for prot_list in self.prot_lists for prot in prot_list])))
 
         self.go_terms = np.array(annot_df['GO-term'])
+        self.go_annot_mat = create_annot_mat(self.all_prot_ids, self.go_terms, self.go2prot_ids)
+
         graph = obonet.read_obo(obo_file)
         id_to_depth_mf = dict(nx.single_target_shortest_path_length(graph, 'GO:0003674'))
         id_to_depth_bp = dict(nx.single_target_shortest_path_length(graph, 'GO:0008150'))
@@ -299,6 +301,20 @@ def seq_kw_collate_pad(batch, max_len=1000):
 
     batch_keywords = [torch.from_numpy(np.array(keyword_inds)) for (_, keyword_inds) in batch]
     return S_padded, batch_keywords
+
+
+def create_annot_mat(prot_ids, go_terms, go2prot_ids):
+    annot_mat = np.zeros((len(prot_ids), len(go_terms)), dtype=bool)
+    prot_id2annot_ind = dict(zip(prot_ids, range(len(prot_ids))))
+    for i, go_term in enumerate(go_terms):
+        annotated_prot_inds = []
+        for prot_id in go2prot_ids[go_term]:
+            annotated_prot_inds.append(prot_id2annot_ind[prot_id])
+        annot_mat[:, i][annotated_prot_inds] = True
+    
+    return annot_mat
+
+
 
 
 def get_data_loader(fasta_fname, keyword_file, batch_size, device=None):
