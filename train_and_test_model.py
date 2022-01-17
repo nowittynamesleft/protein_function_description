@@ -111,7 +111,7 @@ def get_individual_go_term_dataloaders(dataset, num_to_predict, max_seq_set_size
             ground_truths.append(ground_truth_desc)
             included_go_term_inds.append(go_term_ind)
     return dls, ground_truths, included_go_term_inds
-    
+
 
 def predict_all_prots_of_go_term(trainer, model, num_pred_terms, save_prefix, dataset, evaluate_probs=False):
     # generate predictions for all proteins of a given GO term, for all GO terms in the dataset given as the argument
@@ -209,16 +209,24 @@ def single_prot_description(model, annot_seq_file, loaded_vocab, save_prefix, nu
     outfile.close()
 
 
-def classification(model, dataset, save_prefix='no_prefix'):
+def classification(model, dataset, save_prefix='no_prefix', subsample=False):
     # extract each seq set, compute all pairs of probabilities
     GO_padded, GO_pad_masks = dataset.get_padded_descs()
     dataset.set_include_go_mode = False
-    dataloaders, _, included_go_inds = get_individual_go_term_dataloaders(dataset, len(dataset), max_seq_set_size=128) # do somewhat specific ones just to take less time...
+    if subsample:
+        included_go_inds = np.arange(len(dataset))
+    else:
+        dataloaders, _, included_go_inds = get_individual_go_term_dataloaders(dataset, len(dataset), max_seq_set_size=128) # do somewhat specific ones just to take less time...
     preds = []
     # tqdm progress bar
     print(str(len(included_go_inds)) + "-way zero-shot classification.")
+    if subsample:
+        print("Subsampling the sequence sets to make predictions")
     for ind in tqdm.tqdm(included_go_inds): # only take the indices of terms that have few enough sequences annotated (to fit in gpu memory)
-        seq_set = dataset.get_annotated_seqs(ind)
+        if subsample:
+            seq_set = dataset[ind]
+        else:
+            seq_set = dataset.get_annotated_seqs(ind)
         S_padded, S_mask = seq_go_collate_pad([seq_set], seq_set_size=len(seq_set[0]))
         #S_padded = S_padded.to(model.device)
         #S_mask = S_mask.to(model.device)
@@ -227,7 +235,7 @@ def classification(model, dataset, save_prefix='no_prefix'):
         #preds.append(seq_set_desc_probs)
 
     #acc = accuracy_score(preds, included_go_inds)
-    pred_outdict = {'seq_set_go_term_inds': included_go_inds, 'all_term_preds': preds}
+    pred_outdict = {'seq_set_go_term_inds': included_go_inds, 'all_term_preds': preds, 'go_descriptions': np.array(dataset.tokenized)}
     pickle.dump(pred_outdict, open(save_prefix + '_pred_dict.pckl', 'wb'))
 
     accs = accuracy(torch.tensor(preds), torch.tensor(included_go_inds), topk=(1000, 500, 100, 50, 10, 5, 1))
@@ -331,5 +339,5 @@ if __name__ == '__main__':
     else:
         test_dataset = SequenceGOCSVDataset(args.test_annot_seq_file, obofile, seq_set_len, vocab=x.vocab)
         #test_dl = DataLoader(subset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
-    preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix)
+    preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, subsample=True)
     
