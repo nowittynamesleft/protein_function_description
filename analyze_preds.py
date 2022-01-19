@@ -4,6 +4,40 @@ import sys
 from data import SequenceGOCSVDataset
 
 
+#TODO: need to have a function that takes in a model and zero-shot predictions 
+# and returns the logits for the predicted GO terms.
+def get_word_logits(model, seq_sets, descriptions):
+    for seq_set in seq_sets:
+
+
+def compute_oversmoothing_logratio(logits, target, non_pad_mask, eos_idx, margin=1e-5):
+    # from Kulikov et al. 2021
+    full_lprobs = torch.log_softmax(logits, dim=-1)
+    target_lprobs = torch.gather(full_lprobs, dim=-1, index=target.unsqueeze(-1))
+
+    # reverse cumsum fast workaround, this makes approximation error for suffix_lprob[:,-1]
+    # in other words, after this operation the smallest suffix of one token does not equal eaxctly to that
+    # true eos_probability. So it is better to exlcude those positions from OSL since theoretically loss there is 0.
+    target_lprobs_withoutpad = (target_lprobs * non_pad_mask).squeeze(-1)
+    suffix_lprob = target_lprobs_withoutpad + torch.sum(target_lprobs_withoutpad, dim=-1, keepdims=True) - torch.cumsum(target_lprobs_withoutpad, dim=-1)
+    
+    eos_lprobs = full_lprobs[:,:,eos_idx] * non_pad_mask.squeeze(-1)
+
+    oversmoothing_loss = torch.maximum(eos_lprobs - suffix_lprob + margin, torch.zeros_like(suffix_lprob))
+    oversmoothing_loss = (oversmoothing_loss.sum(dim=1) / non_pad_mask.squeeze(dim=-1).sum(dim=1)).mean()
+
+    # computing the oversmoothing rate here for free
+    with torch.no_grad():
+        oversmoothed = eos_lprobs > suffix_lprob
+        oversmoothed = oversmoothed * non_pad_mask.squeeze(-1)  # exclude pad cases from oversmoothing rate
+        oversmoothed = oversmoothed * (target != eos_idx).float() # exclude t=true_eos from oversmoothing counts
+
+        num_osr_per_seq = non_pad_mask.squeeze(-1).sum(-1) - 1  # exclude the <eos> from each seq count
+        osr = oversmoothed.sum(-1) / num_osr_per_seq # compute oversmoothing per sequence
+
+    return oversmoothing_loss, osr
+
+
 def tokenization_to_description(tokenized_desc): # assume @@ is BPE separator
     return [''.join([token[:-2] if token[-2:] == '@@' else token + ' ' for token in tokenized_desc])]
 

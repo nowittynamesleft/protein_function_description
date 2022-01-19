@@ -152,13 +152,14 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         # Based on description from Mihaylova and Martins 2019
         # create reference sequence by computing one-by-one the target tokens 
         #import ipdb; ipdb.set_trace()
-        tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg).unsqueeze(0))
-        outs = self.transformer_decoder(tgt_emb, avg_src_transformed_embed, 
-                tgt_mask, None, tgt_padding_mask, None) # memory key padding is always assumed to be None
-        predicted_tokens = torch.max(self.generator(outs), dim=-1)[1].squeeze(0)
-        pred_tokens_shifted = torch.cat((torch.zeros(1, device=self.device, dtype=torch.long), predicted_tokens[:-1]))
-        truth_or_pred = torch.rand(len(trg)).to(self.device) < teacher_force
-        reference_desc = torch.where(truth_or_pred, trg, pred_tokens_shifted)
+        with torch.no_grad():
+            tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg).unsqueeze(0))
+            outs = self.transformer_decoder(tgt_emb, avg_src_transformed_embed, 
+                    tgt_mask, None, tgt_padding_mask, None) # memory key padding is always assumed to be None
+            predicted_tokens = torch.max(self.generator(outs), dim=-1)[1].squeeze(0)
+            pred_tokens_shifted = torch.cat((torch.zeros(1, device=self.device, dtype=torch.long), predicted_tokens[:-1]))
+            truth_or_pred = torch.rand(len(trg)).to(self.device) < teacher_force
+            reference_desc = torch.where(truth_or_pred, trg, pred_tokens_shifted)
 
         # second decoding based on reference
         tgt_emb = self.positional_encoding(self.tgt_tok_emb(reference_desc).unsqueeze(0))
@@ -302,74 +303,74 @@ class SeqSet2SeqTransformer(pl.LightningModule):
     def get_seq_set_desc_pair_probs(self, pred_batch):
         # get correct sequence set GO description pair probabilities
         assert 'cuda' in str(self.device)
+        #import ipdb; ipdb.set_trace()
         start_symbol = 0
         end_symbol = self.tgt_vocab_size
         S_padded, S_pad_mask, actual_GO_padded_all, GO_pad_mask = pred_batch
-        actual_GO_padded_input = actual_GO_padded_all[:, :-1]
-        actual_GO_padded_output = actual_GO_padded_all[:, 1:]
-        GO_pad_mask = GO_pad_mask[:, :-1]
-        #import ipdb; ipdb.set_trace()
-        src_mask, tgt_mask = create_mask(S_padded, actual_GO_padded_input, device=self.device)
-
+        src_mask, tgt_mask = create_mask(S_padded, actual_GO_padded[:, :-1], device=self.device) # create description mask only for input
         num_sets = S_padded.shape[0]
-        
-        desc_probs = []
+
+        desc_log_probs = []
         for seq_set_ind in range(num_sets):
             #print(str(seq_set_ind) + ' out of ' + str(num_sets) + ' sequence sets.')
             curr_actual_GO_padded = actual_GO_padded[seq_set_ind]
+            curr_tgt_mask = tgt_mask[seq_set_ind]
+            curr_GO_pad_mask = GO_pad_mask[seq_set_ind]
 
             embedding = self.encode_seq_set(S_padded[seq_set_ind, ...], 
                     src_mask[seq_set_ind, ...], S_pad_mask[seq_set_ind, ...])
-            desc_log_prob = self.get_single_seq_set_desc_pair_probs(embedding, curr_actual_GO_padded, tgt_mask, GO_pad_mask)
+            desc_log_prob = self.get_single_seq_set_desc_pair_probs(embedding, curr_actual_GO_padded, curr_tgt_mask, curr_GO_pad_mask)
+            #desc_log_prob = self.get_single_seq_set_desc_pair_probs(embedding, curr_actual_GO_padded_input, curr_actual_GO_padded_output, curr_GO_pad_mask_input, curr_GO_pad_mask_output)
 
-            desc_probs.append(desc_log_prob)
+            desc_log_probs.append(desc_log_prob)
 
-        desc_probs = torch.Tensor(desc_probs)
+        desc_log_probs = torch.Tensor(desc_log_probs)
 
-        return desc_probs
+        return desc_log_probs
 
 
-    def get_single_seq_set_desc_pair_probs(self, embedding, actual_GO_padded, GO_mask, GO_pad_mask):
+    def get_single_seq_set_desc_pair_probs(self, embedding, actual_GO_padded, tgt_mask, GO_pad_mask, total_sum=True):
         # given sequence set embedding and GO description, calculate probability model assigns to the sequence with length penalty
         start_symbol = 0
         end_symbol = self.tgt_vocab_size - 1
         desc_log_prob = 0
 
-        tgt_emb = self.positional_encoding(self.tgt_tok_emb(actual_GO_padded).unsqueeze(0))
+        #import ipdb; ipdb.set_trace()
+        actual_GO_padded_input = actual_GO_padded[:-1]
+        actual_GO_padded_output = actual_GO_padded[1:]
+        tgt_emb = self.positional_encoding(self.tgt_tok_emb(actual_GO_padded_input).unsqueeze(0)) # only input for getting description representation for decoder
+        GO_pad_mask_input = GO_pad_mask[:-1]
+        GO_pad_mask_output = GO_pad_mask[1:]
+
         outputs = self.transformer_decoder(tgt_emb, embedding, 
-                 GO_mask, None, GO_pad_mask.unsqueeze(0), None) # memory key padding is always assumed to be None
+                tgt_mask, None, GO_pad_mask_input.unsqueeze(0), None) # memory key padding is always assumed to be None, don't need attention mask to hide next description tokens from model
         #outs = self.scheduled_sampling_MM(trg[i, :], avg_src_transformed_embed, tgt_mask[i, :], tgt_padding_mask[i, :].unsqueeze(0), teacher_force=self.tf_prob)
-            
         probs = self.generator(outputs).squeeze()
-        considered_probs = probs[~GO_pad_mask]
-        correct_tokens = actual_GO_padded[~GO_pad_mask]
+            
+        considered_probs = probs[~GO_pad_mask_output]
+        correct_tokens = actual_GO_padded_output[~GO_pad_mask_output]
         correct_token_probs = torch.stack([considered_probs[position, correct_tokens[position]] for position in range(correct_tokens.shape[0])])
         desc_log_prob = torch.sum(correct_token_probs, dim=-1)
 
         desc_log_prob /= len(correct_tokens) # length penalty, no parameter for now
 
-        '''
-        for position, token in enumerate(actual_GO_padded): # this doesn't need to be sequential
-            out, prob = self.get_next_token_probs(curr_GO_padded, embedding)
-            prob = torch.softmax(prob.squeeze(), dim=-1)
-            desc_log_prob += torch.log(prob[token])
-            curr_GO_padded = actual_GO_padded[:position + 1]
-        '''
-
-        
-        return torch.exp(desc_log_prob).item()
+        if total_sum: 
+            return desc_log_prob.item()
+        else:
+            return correct_token_probs
 
 
     def classify_seq_set(self, S_padded, S_pad_mask, all_GO_padded, GO_pad_mask):
-        probs = []
-        src_mask, tgt_mask = create_mask(S_padded, all_GO_padded, device=self.device)
+        log_probs = []
+        src_mask, tgt_mask = create_mask(S_padded, all_GO_padded[:, :-1], device=self.device) # create mask only for input
         #import ipdb; ipdb.set_trace()
         embedding = self.encode_seq_set(S_padded[0].to(self.device), 
                 src_mask[0].to(self.device), S_pad_mask[0].to(self.device))
         for go_ind in range(all_GO_padded.shape[0]):
             curr_GO_padded = all_GO_padded[go_ind].to(self.device)
-            probs.append(self.get_single_seq_set_desc_pair_probs(embedding, curr_GO_padded, tgt_mask[go_ind].to(self.device), GO_pad_mask[go_ind].to(self.device)))
-        return probs
+            log_probs.append(self.get_single_seq_set_desc_pair_probs(embedding, curr_GO_padded, tgt_mask[go_ind].to(self.device), GO_pad_mask[go_ind].to(self.device)))
+
+        return log_probs
 
 
     def beam_search(self, pred_batch):

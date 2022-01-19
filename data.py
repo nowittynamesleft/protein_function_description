@@ -54,7 +54,7 @@ class SequenceGOCSVDataset(Dataset):
 
 
     """
-    def __init__(self, go_file, obo_file, num_samples, vocab=None, include_go=True):
+    def __init__(self, go_file, obo_file, num_samples, vocab=None, include_go=True, save_prefix='no_prefix'):
         annot_df = pd.read_csv(go_file, sep='\t')
         prot_seq_rows = annot_df.apply(lambda row: row['Prot-seqs'].split(','), axis=1)
         prot_seq_rows = [[seq2AAinds(prot) for prot in prot_seq_row] for prot_seq_row in prot_seq_rows]
@@ -86,6 +86,7 @@ class SequenceGOCSVDataset(Dataset):
         self.go_desc_strings = np.array(annot_df['GO-def'])
         self.include_go = include_go
         self.sample = True
+        #import ipdb; ipdb.set_trace()
         print('Num go terms')
         print(len(self.go_terms))
         tokenizer = get_tokenizer('basic_english') 
@@ -95,6 +96,7 @@ class SequenceGOCSVDataset(Dataset):
             self.vocab = sorted(list(set(itertools.chain.from_iterable(tokenized))))
             self.vocab.insert(0, '<SOS>')
             self.vocab.append('<EOS>')
+            pickle.dump(self.vocab, open(save_prefix + '_vocab.pckl', 'wb'))
         else:
             self.vocab = vocab
         for token_list in tokenized:

@@ -80,6 +80,14 @@ def convert_sample_preds_to_words(predictions, vocab):
     return word_preds
 
 
+def convert_single_batch_preds_to_words(predictions, vocab):
+    # converts all predictions in a set of batches to words in a num_batches*batch_size-length list of sentence-length lists of strings
+    word_preds = []
+    for sample in predictions:
+        word_preds.append([vocab[ind] for ind in sample])
+    return word_preds
+
+
 def get_prot_preds(fasta_file, trainer, model, combined=False):
     seq_dataset = SequenceDataset(fasta_file)
     if not combined:
@@ -157,6 +165,23 @@ def predict_all_prots_of_go_term(trainer, model, num_pred_terms, save_prefix, da
     outfile.close()
 
 
+def predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset, save_prefix):
+    pred_output = trainer.predict(model, test_dl)
+    
+    preds = [pred for batch in pred_output for pred in batch[0]]
+    probs = [prob for batch in pred_output for prob in batch[1]]
+    import ipdb; ipdb.set_trace()
+    word_preds = convert_sample_preds_to_words(preds, model.vocab)
+    outfile = open(save_prefix + '_subsample_prot_preds.txt', 'w')
+    for pred in range(preds):
+        included_term_ind = included_term_inds[i]
+        outfile.write('GO term: ' + test_dataset.go_terms[included_term_ind] + ': ' + test_dataset.go_names[included_term_ind] + '\n')
+        outfile.write('Predictions:\n')
+        outfile.write(pred)
+        outfile.write('Actual description:\n' + ' '.join(x.go_descriptions[included_term_ind]) + '\n\n')
+    outfile.close()
+    
+
 def all_combined_fasta_description(model, trainer, fasta_fname, vocab, save_prefix):
     # generate predictions for all proteins in a fasta
     prot_ids, prot_preds = get_prot_preds(fasta_fname, trainer, model, combined=True)
@@ -212,7 +237,7 @@ def single_prot_description(model, annot_seq_file, loaded_vocab, save_prefix, nu
 def classification(model, dataset, save_prefix='no_prefix', subsample=False):
     # extract each seq set, compute all pairs of probabilities
     GO_padded, GO_pad_masks = dataset.get_padded_descs()
-    dataset.set_include_go_mode = False
+    dataset.set_include_go_mode(False)
     if subsample:
         included_go_inds = np.arange(len(dataset))
     else:
@@ -230,18 +255,20 @@ def classification(model, dataset, save_prefix='no_prefix', subsample=False):
         S_padded, S_mask = seq_go_collate_pad([seq_set], seq_set_size=len(seq_set[0]))
         #S_padded = S_padded.to(model.device)
         #S_mask = S_mask.to(model.device)
-        seq_set_desc_log_probs = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks) # batch sizes of 1 each, index out of it
-        preds.append(seq_set_desc_log_probs)
+        seq_set_desc_probs = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks) # batch sizes of 1 each, index out of it
+        preds.append(seq_set_desc_probs)
         #preds.append(seq_set_desc_probs)
 
     #acc = accuracy_score(preds, included_go_inds)
-    pred_outdict = {'seq_set_go_term_inds': included_go_inds, 'all_term_preds': preds, 'go_descriptions': np.array(dataset.tokenized)}
+    pred_outdict = {'seq_set_go_term_inds': included_go_inds, 'all_term_preds': preds, 'go_descriptions': np.array(dataset.go_descriptions)}
     pickle.dump(pred_outdict, open(save_prefix + '_pred_dict.pckl', 'wb'))
 
-    accs = accuracy(torch.tensor(preds), torch.tensor(included_go_inds), topk=(1000, 500, 100, 50, 10, 5, 1))
-    print('Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs))
-    #accs = accuracy(torch.tensor(preds), torch.tensor(included_go_inds), topk=(5, 4, 3, 2, 1))
-    #print('Top 5, 4, 3, 2, 1 accuracies: ' + str(accs))
+    if len(preds) < 1000:
+        accs = accuracy(torch.tensor(preds), torch.tensor(included_go_inds), topk=(5, 4, 3, 2, 1))
+        print('Top 5, 4, 3, 2, 1 accuracies: ' + str(accs))
+    else:
+        accs = accuracy(torch.tensor(preds), torch.tensor(included_go_inds), topk=(1000, 500, 100, 50, 10, 5, 1))
+        print('Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs))
 
     #aupr = micro_aupr(preds, dataset.go_annot_mat)
 
@@ -258,7 +285,6 @@ def get_train_val_dataloaders(full_dataset, batch_size, collate_fn, test=False):
     num_samples = len(full_dataset)
     if test:
         num_samples = 10
-
     train_inds, val_inds = train_test_split(range(0, num_samples))
     train_dl = get_subset_dataloader(full_dataset, train_inds, batch_size, collate_fn)
     val_dl = get_subset_dataloader(full_dataset, val_inds, batch_size, collate_fn)
@@ -285,7 +311,9 @@ if __name__ == '__main__':
         loaded_vocab = pickle.load(open(args.load_vocab, 'rb'))
         x = SequenceGOCSVDataset(args.annot_seq_file, obofile, seq_set_len, vocab=loaded_vocab)
     else:
+        vocab_fname = args.save_prefix + '_vocab.pckl'
         x = SequenceGOCSVDataset(args.annot_seq_file, obofile, seq_set_len)
+        pickle.dump(x.vocab, open(vocab_fname, 'wb'))
 
     #num_gpus = torch.cuda.device_count()
     num_gpus = 1
@@ -335,9 +363,14 @@ if __name__ == '__main__':
     model.to('cuda:0')
     if args.test_annot_seq_file is None:
         test_dataset = Subset(x, list(range(num_pred_terms)))
-        #test_dl = DataLoader(subset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
+        test_dl = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
     else:
         test_dataset = SequenceGOCSVDataset(args.test_annot_seq_file, obofile, seq_set_len, vocab=x.vocab)
-        #test_dl = DataLoader(subset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
+        test_dl = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
+    
     preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, subsample=True)
+    #print('Predict test:')
+    #model.pred_pair_probs = True
+    #trainer.predict(model, test_dl)
+    #predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset, args.save_prefix)
     
