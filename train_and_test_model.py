@@ -243,6 +243,7 @@ def classification(model, dataset, save_prefix='no_prefix', subsample=False):
     else:
         dataloaders, _, included_go_inds = get_individual_go_term_dataloaders(dataset, len(dataset), max_seq_set_size=128) # do somewhat specific ones just to take less time...
     preds = []
+    all_pred_token_probs = []
     # tqdm progress bar
     print(str(len(included_go_inds)) + "-way zero-shot classification.")
     if subsample:
@@ -255,12 +256,13 @@ def classification(model, dataset, save_prefix='no_prefix', subsample=False):
         S_padded, S_mask = seq_go_collate_pad([seq_set], seq_set_size=len(seq_set[0]))
         #S_padded = S_padded.to(model.device)
         #S_mask = S_mask.to(model.device)
-        seq_set_desc_probs = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks) # batch sizes of 1 each, index out of it
+        seq_set_desc_probs, seq_set_desc_token_probs = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks) # batch sizes of 1 each, index out of it
         preds.append(seq_set_desc_probs)
+        all_pred_token_probs.append(seq_set_desc_token_probs)
         #preds.append(seq_set_desc_probs)
 
     #acc = accuracy_score(preds, included_go_inds)
-    pred_outdict = {'seq_set_go_term_inds': included_go_inds, 'all_term_preds': preds, 'go_descriptions': np.array(dataset.go_descriptions)}
+    pred_outdict = {'seq_set_go_term_inds': included_go_inds, 'all_term_preds': preds, 'all_term_token_probs': seq_set_desc_token_probs, 'go_descriptions': np.array(dataset.go_descriptions)}
     pickle.dump(pred_outdict, open(save_prefix + '_pred_dict.pckl', 'wb'))
 
     if len(preds) < 1000:
@@ -309,10 +311,10 @@ if __name__ == '__main__':
     emb_size = args.emb_size
     if args.load_vocab is not None:
         loaded_vocab = pickle.load(open(args.load_vocab, 'rb'))
-        x = SequenceGOCSVDataset(args.annot_seq_file, obofile, seq_set_len, vocab=loaded_vocab)
+        x = SequenceGOCSVDataset(args.annot_seq_file, obofile, seq_set_len, vocab=loaded_vocab, save_prefix=args.save_prefix)
     else:
         vocab_fname = args.save_prefix + '_vocab.pckl'
-        x = SequenceGOCSVDataset(args.annot_seq_file, obofile, seq_set_len)
+        x = SequenceGOCSVDataset(args.annot_seq_file, obofile, seq_set_len, save_prefix=args.save_prefix)
         pickle.dump(x.vocab, open(vocab_fname, 'wb'))
 
     #num_gpus = torch.cuda.device_count()

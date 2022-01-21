@@ -311,6 +311,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         num_sets = S_padded.shape[0]
 
         desc_log_probs = []
+        all_desc_token_probs = []
         for seq_set_ind in range(num_sets):
             #print(str(seq_set_ind) + ' out of ' + str(num_sets) + ' sequence sets.')
             curr_actual_GO_padded = actual_GO_padded[seq_set_ind]
@@ -319,17 +320,19 @@ class SeqSet2SeqTransformer(pl.LightningModule):
 
             embedding = self.encode_seq_set(S_padded[seq_set_ind, ...], 
                     src_mask[seq_set_ind, ...], S_pad_mask[seq_set_ind, ...])
-            desc_log_prob = self.get_single_seq_set_desc_pair_probs(embedding, curr_actual_GO_padded, curr_tgt_mask, curr_GO_pad_mask)
+            desc_log_prob, correct_token_probs = self.get_single_seq_set_desc_pair_probs(embedding, curr_actual_GO_padded, curr_tgt_mask, curr_GO_pad_mask)
             #desc_log_prob = self.get_single_seq_set_desc_pair_probs(embedding, curr_actual_GO_padded_input, curr_actual_GO_padded_output, curr_GO_pad_mask_input, curr_GO_pad_mask_output)
 
             desc_log_probs.append(desc_log_prob)
+            all_desc_token_probs.append(correct_token_probs)
 
         desc_log_probs = torch.Tensor(desc_log_probs)
+        all_desc_token_probs = torch.Tensor(all_desc_token_probs)
 
-        return desc_log_probs
+        return desc_log_probs, all_desc_token_probs 
 
 
-    def get_single_seq_set_desc_pair_probs(self, embedding, actual_GO_padded, tgt_mask, GO_pad_mask, total_sum=True):
+    def get_single_seq_set_desc_pair_probs(self, embedding, actual_GO_padded, tgt_mask, GO_pad_mask):
         # given sequence set embedding and GO description, calculate probability model assigns to the sequence with length penalty
         start_symbol = 0
         end_symbol = self.tgt_vocab_size - 1
@@ -351,26 +354,27 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         correct_tokens = actual_GO_padded_output[~GO_pad_mask_output]
         correct_token_probs = torch.stack([considered_probs[position, correct_tokens[position]] for position in range(correct_tokens.shape[0])])
         desc_log_prob = torch.sum(correct_token_probs, dim=-1)
+        correct_token_probs = correct_token_probs.detach().cpu().numpy()
 
         desc_log_prob /= len(correct_tokens) # length penalty, no parameter for now
 
-        if total_sum: 
-            return desc_log_prob.item()
-        else:
-            return correct_token_probs
+        return desc_log_prob.item(), correct_token_probs
 
 
     def classify_seq_set(self, S_padded, S_pad_mask, all_GO_padded, GO_pad_mask):
         log_probs = []
+        all_desc_token_probs = []
         src_mask, tgt_mask = create_mask(S_padded, all_GO_padded[:, :-1], device=self.device) # create mask only for input
         #import ipdb; ipdb.set_trace()
         embedding = self.encode_seq_set(S_padded[0].to(self.device), 
                 src_mask[0].to(self.device), S_pad_mask[0].to(self.device))
         for go_ind in range(all_GO_padded.shape[0]):
             curr_GO_padded = all_GO_padded[go_ind].to(self.device)
-            log_probs.append(self.get_single_seq_set_desc_pair_probs(embedding, curr_GO_padded, tgt_mask[go_ind].to(self.device), GO_pad_mask[go_ind].to(self.device)))
+            desc_log_prob, desc_token_probs = self.get_single_seq_set_desc_pair_probs(embedding, curr_GO_padded, tgt_mask[go_ind].to(self.device), GO_pad_mask[go_ind].to(self.device))
+            log_probs.append(desc_log_prob)
+            all_desc_token_probs.append(desc_token_probs)
 
-        return log_probs
+        return log_probs, all_desc_token_probs
 
 
     def beam_search(self, pred_batch):
