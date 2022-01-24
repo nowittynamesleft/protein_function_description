@@ -293,17 +293,6 @@ def get_train_val_dataloaders(full_dataset, batch_size, collate_fn, test=False):
     return train_dl, val_dl
 
 
-def get_train_val_datasets(full_dataset, batch_size, collate_fn, test=False):
-    num_samples = len(full_dataset)
-    if test:
-        num_samples = 10
-
-    train_inds, val_inds = train_test_split(range(0, num_samples))
-    train_data = Subset(dataset, train_inds)
-    val_data = Subset(dataset, val_inds)
-    return train_data, val_data
-
-
 if __name__ == '__main__':
     args = arguments()
     np.random.seed(973)
@@ -332,26 +321,38 @@ if __name__ == '__main__':
             dim_feedforward=512, num_heads=4, dropout=0.0, vocab=x.vocab, 
             min_tf_prob=args.min_tf_prob)
 
+    if args.test_annot_seq_file is None:
+        test_dataset = Subset(x, list(range(num_pred_terms)))
+        test_dl = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
+    else:
+        test_dataset = SequenceGOCSVDataset(args.test_annot_seq_file, obofile, seq_set_len, vocab=x.vocab)
+        test_dl = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
+
     print('Vocab size:')
     print(len(x.vocab))
     collate_fn = x.collate_fn
 
     metric_callback = MetricsCallback()
-    early_stopping_callback = EarlyStopping(monitor="val_loss", min_delta=0.00, patience=10)
+    #early_stopping_callback = EarlyStopping(monitor="val_loss", min_delta=0.00, patience=10)
     csv_logger = CSVLogger('lightning_logs', name=(args.save_prefix + '_experiment'))
     #trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs, auto_select_gpus=True,  # mixed precision causes nan loss, so back to regular precision.
             #callbacks=metric_callback, strategy=DDPPlugin(find_unused_parameters=False), checkpoint_callback=(not args.test), logger=(not args.test))
+    #trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs,  # mixed precision causes nan loss, so back to regular precision.
+    #        callbacks=[metric_callback, early_stopping_callback], logger=csv_logger)
     trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs,  # mixed precision causes nan loss, so back to regular precision.
-            callbacks=[metric_callback, early_stopping_callback], logger=csv_logger)
+            callbacks=[metric_callback], logger=csv_logger)
 
     if args.load_model_predict is None:
         if args.load_model is not None:
             print('Loading model for training: ' + args.load_model)
             ckpt = torch.load(args.load_model)
             model.load_state_dict(ckpt['state_dict'])
-        import ipdb; ipdb.set_trace()
-        train_dl, val_dl = get_train_val_dataloaders(x, args.batch_size, collate_fn, test=args.test)
-        trainer.fit(model, train_dl, val_dl)
+            print('Classfication before training:')
+            preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, subsample=True)
+        #train_dl, val_dl = get_train_val_dataloaders(x, args.batch_size, collate_fn, test=args.test)
+        #trainer.fit(model, train_dl, val_dl)
+        dataloader = DataLoader(x, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
+        trainer.fit(model, dataloader)
         logged_metrics = metric_callback.metrics
         print('Logged_metrics')
         print(logged_metrics)
@@ -364,13 +365,7 @@ if __name__ == '__main__':
     print(model.tf_prob)
     #average_true_desc_prob = predict_all_prots_of_go_term(trainer, model, num_pred_terms, args.save_prefix, x, evaluate_probs=True)
     model.to('cuda:0')
-    if args.test_annot_seq_file is None:
-        test_dataset = Subset(x, list(range(num_pred_terms)))
-        test_dl = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
-    else:
-        test_dataset = SequenceGOCSVDataset(args.test_annot_seq_file, obofile, seq_set_len, vocab=x.vocab)
-        test_dl = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
-    
+    print('Classfication after whole script:')
     preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, subsample=True)
     #print('Predict test:')
     #model.pred_pair_probs = True
