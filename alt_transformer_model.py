@@ -191,10 +191,11 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             '''
             avg_src_transformed_embed = self.encode_seq_set(src[i, ...], src_mask[i, ...], src_padding_mask[i, ...])
             #outs = self.decode(trg[i, :], avg_src_transformed_embed, tgt_mask[i,:])
-            #tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg[i, :]).unsqueeze(0))
-            #outs = self.transformer_decoder(tgt_emb, avg_src_transformed_embed, 
-            #         tgt_mask[i, :], None, tgt_padding_mask[i, :].unsqueeze(0), None) # memory key padding is always assumed to be None
-            outs = self.scheduled_sampling_MM(trg[i, :], avg_src_transformed_embed, tgt_mask[i, :], tgt_padding_mask[i, :].unsqueeze(0), teacher_force=self.tf_prob)
+            tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg[i, :]).unsqueeze(0))
+            outs = self.transformer_decoder(tgt_emb, avg_src_transformed_embed, 
+                     tgt_mask[i, :], None, tgt_padding_mask[i, :].unsqueeze(0), None) # memory key padding is always assumed to be None
+            # removing scheduled sampling!!!
+            #outs = self.scheduled_sampling_MM(trg[i, :], avg_src_transformed_embed, tgt_mask[i, :], tgt_padding_mask[i, :].unsqueeze(0), teacher_force=self.tf_prob)
             outputs.append(self.generator(outs))
             
         outputs = torch.stack(outputs).squeeze(1)

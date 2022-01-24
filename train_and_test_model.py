@@ -349,6 +349,7 @@ if __name__ == '__main__':
             print('Loading model for training: ' + args.load_model)
             ckpt = torch.load(args.load_model)
             model.load_state_dict(ckpt['state_dict'])
+        import ipdb; ipdb.set_trace()
         train_dl, val_dl = get_train_val_dataloaders(x, args.batch_size, collate_fn, test=args.test)
         trainer.fit(model, train_dl, val_dl)
         logged_metrics = metric_callback.metrics
