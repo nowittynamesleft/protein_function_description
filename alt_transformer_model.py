@@ -335,6 +335,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
 
     def get_single_seq_set_desc_pair_probs(self, embedding, actual_GO_padded, tgt_mask, GO_pad_mask):
         # given sequence set embedding and GO description, calculate probability model assigns to the sequence with length penalty
+        #import ipdb; ipdb.set_trace()
         start_symbol = 0
         end_symbol = self.tgt_vocab_size - 1
         desc_log_prob = 0
