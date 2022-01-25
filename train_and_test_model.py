@@ -316,6 +316,10 @@ if __name__ == '__main__':
     if args.num_pred_terms == -1:
         num_pred_terms = len(x)
 
+
+    print('Vocab size:')
+    print(len(x.vocab))
+    collate_fn = x.collate_fn
     model = SeqSet2SeqTransformer(num_encoder_layers=1, num_decoder_layers=1, 
             emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
             dim_feedforward=512, num_heads=4, dropout=0.0, vocab=x.vocab, 
@@ -327,10 +331,6 @@ if __name__ == '__main__':
     else:
         test_dataset = SequenceGOCSVDataset(args.test_annot_seq_file, obofile, seq_set_len, vocab=x.vocab)
         test_dl = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
-
-    print('Vocab size:')
-    print(len(x.vocab))
-    collate_fn = x.collate_fn
 
     metric_callback = MetricsCallback()
     #early_stopping_callback = EarlyStopping(monitor="val_loss", min_delta=0.00, patience=10)
