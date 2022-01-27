@@ -167,10 +167,27 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                 tgt_mask, None, tgt_padding_mask, None) # memory key padding is always assumed to be None
         return outs
     
+
     def forward(self, src: Tensor, trg: Tensor, src_mask: Tensor,
                 tgt_mask: Tensor, src_padding_mask: Tensor,
                 tgt_padding_mask: Tensor, memory_key_padding_mask: Tensor):
         
+        '''
+        print('forward shapes:')
+        print('S_padded:')
+        print(src.shape)
+        print('src_mask:')
+        print(src_mask.shape)
+        print('S_pad_mask:')
+        print(src_padding_mask.shape)
+        print('all_GO_padded:')
+        print(trg.shape)
+        print('GO_pad_mask:')
+        print(tgt_padding_mask.shape)
+        print('tgt_mask:')
+        print(tgt_mask.shape)
+        '''
+
         src_transformed_list = []
         outputs = []
         #print(src.shape)
@@ -178,7 +195,6 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         #print(tgt_padding_mask.shape) 
         
         for i in range(src.shape[0]): # seq set in batch
-            #import ipdb; ipdb.set_trace()
 
             '''
             src_emb = self.positional_encoding(self.src_tok_emb(src[i, :, :]))
@@ -227,6 +243,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         _, preds = outputs.max(axis=1)
         #print(self.convert_batch_preds_to_words(preds))
         #print(GO_padded_output.shape)
+        import ipdb; ipdb.set_trace()
         loss = self.loss_fn(outputs, GO_padded_output)
         #self.log_dict({'loss': loss, 'sample_output': outputs[0]})
         #self.log_dict({'loss': loss})
@@ -364,6 +381,17 @@ class SeqSet2SeqTransformer(pl.LightningModule):
 
 
     def classify_seq_set(self, S_padded, S_pad_mask, all_GO_padded, GO_pad_mask):
+        '''
+        print('Classify_seq_set shapes:')
+        print('S_padded:')
+        print(S_padded.shape)
+        print('S_pad_mask:')
+        print(S_pad_mask.shape)
+        print('all_GO_padded:')
+        print(all_GO_padded.shape)
+        print('GO_pad_mask:')
+        print(GO_pad_mask.shape)
+        '''
         log_probs = []
         all_desc_token_probs = []
         src_mask, tgt_mask = create_mask(S_padded, all_GO_padded[:, :-1], device=self.device) # create mask only for input

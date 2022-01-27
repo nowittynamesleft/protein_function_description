@@ -262,14 +262,16 @@ def classification(model, dataset, save_prefix='no_prefix', subsample=False):
         #preds.append(seq_set_desc_probs)
 
     #acc = accuracy_score(preds, included_go_inds)
+    preds = torch.tensor(preds).transpose(0,1)
+    included_go_inds = torch.tensor(included_go_inds)
     pred_outdict = {'seq_set_go_term_inds': included_go_inds, 'all_term_preds': preds, 'all_term_token_probs': seq_set_desc_token_probs, 'go_descriptions': np.array(dataset.go_descriptions)}
     pickle.dump(pred_outdict, open(save_prefix + '_pred_dict.pckl', 'wb'))
 
     if len(preds) < 1000:
-        accs = accuracy(torch.tensor(preds), torch.tensor(included_go_inds), topk=(5, 4, 3, 2, 1))
+        accs = accuracy(preds, included_go_inds, topk=(5, 4, 3, 2, 1))
         print('Top 5, 4, 3, 2, 1 accuracies: ' + str(accs))
     else:
-        accs = accuracy(torch.tensor(preds), torch.tensor(included_go_inds), topk=(1000, 500, 100, 50, 10, 5, 1))
+        accs = accuracy(preds, included_go_inds, topk=(1000, 500, 100, 50, 10, 5, 1))
         print('Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs))
 
     #aupr = micro_aupr(preds, dataset.go_annot_mat)
@@ -347,12 +349,16 @@ if __name__ == '__main__':
             print('Loading model for training: ' + args.load_model)
             ckpt = torch.load(args.load_model)
             model.load_state_dict(ckpt['state_dict'])
+            model.to('cuda:0')
             print('Classfication before training:')
             preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, subsample=True)
-        #train_dl, val_dl = get_train_val_dataloaders(x, args.batch_size, collate_fn, test=args.test)
-        #trainer.fit(model, train_dl, val_dl)
-        dataloader = DataLoader(x, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
-        trainer.fit(model, dataloader)
+        train_dl, val_dl = get_train_val_dataloaders(x, args.batch_size, collate_fn, test=args.test)
+        print('Validation before training...')
+        trainer.validate(model, val_dl)
+        print('Training...')
+        trainer.fit(model, train_dl, val_dl)
+        #dataloader = DataLoader(x, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
+        #trainer.fit(model, dataloader)
         logged_metrics = metric_callback.metrics
         print('Logged_metrics')
         print(logged_metrics)
