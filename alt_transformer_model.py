@@ -491,9 +491,9 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                         prob = torch.softmax(prob.squeeze(), dim=-1)
                         curr_top_probs, curr_top_words = torch.topk(prob, beam_width, dim=-1, largest=True)
                         # Length penalty
-                        #curr_log_probs.append((candidate_probs[beam] + torch.log(curr_top_probs))/(len(candidate_sentences[beam]))**t)
+                        curr_log_probs.append((candidate_probs[beam] + torch.log(curr_top_probs))/(len(candidate_sentences[beam]))**t)
                         #  no len penalty
-                        curr_log_probs.append(candidate_probs[beam] + torch.log(curr_top_probs))
+                        #curr_log_probs.append(candidate_probs[beam] + torch.log(curr_top_probs))
                         curr_words.append(curr_top_words)
                         keep_inds.append(beam)
                     else:
@@ -519,8 +519,8 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                     assert selected_candidate[-1] != end_symbol
                     new_candidate_sentence = torch.cat([selected_candidate, second_word.unsqueeze(0)])
                     new_candidate_sentences.append(new_candidate_sentence)
-                    #new_candidate_probs.append(unended_top_probs[first_word_beam_ind]*(len(new_candidate_sentence))**t)
-                    new_candidate_probs.append(unended_top_probs[first_word_beam_ind])
+                    new_candidate_probs.append(unended_top_probs[first_word_beam_ind]*(len(new_candidate_sentence))**t)
+                    #new_candidate_probs.append(unended_top_probs[first_word_beam_ind])
                 
                 # now concatenate the ended candidates and the new candidates, and do a final ranking
                 all_probs = torch.cat((torch.Tensor(new_candidate_probs), torch.Tensor(log_probs_ended)))
