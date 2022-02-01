@@ -123,7 +123,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         self.tgt_tok_emb = TokenEmbedding(tgt_vocab_size, emb_size)
         self.tgt_vocab_size = tgt_vocab_size
         self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout)
-        self.loss_fn = nn.CrossEntropyLoss()
+        self.loss_fn = nn.CrossEntropyLoss(ignore_index=0) # ignore padding in calculating loss; 0 is padding index
         self.len_convert = LengthConverter()
         self.max_desc_len = 100
         self.vocab = vocab
@@ -243,18 +243,37 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         _, preds = outputs.max(axis=1)
         #print(self.convert_batch_preds_to_words(preds))
         #print(GO_padded_output.shape)
-        import ipdb; ipdb.set_trace()
+        #import ipdb; ipdb.set_trace()
+
+        #loss = self.loss_fn(outputs.contiguous().view(-1, len(self.vocab)), GO_padded_output.contiguous().view(-1))
+        #loss = self.loss_fn(outputs.reshape(-1, len(self.vocab)).contiguous(), GO_padded_output.view(-1).contiguous())
         loss = self.loss_fn(outputs, GO_padded_output)
+        #import ipdb; ipdb.set_trace()
         #self.log_dict({'loss': loss, 'sample_output': outputs[0]})
         #self.log_dict({'loss': loss})
         if batch_idx == 0:
-            print('First batch first sample outputs:')
-            print(self.convert_sample_preds_to_words(preds[0]))
+            print('First batch outputs:')
+            print(self.convert_batch_preds_to_words(preds))
             print('Actual description:')
-            print(self.convert_sample_preds_to_words(GO_padded_all[0]))
+            print(self.convert_batch_preds_to_words(GO_padded_output))
+            print('Loss, reshape then contiguous:')
+            print(self.loss_fn(outputs.reshape(-1, len(self.vocab)).contiguous(), GO_padded_output.view(-1).contiguous()))
+            temp_loss = nn.CrossEntropyLoss()
+            print('Old loss no ignore index:')
+            print(temp_loss(outputs, GO_padded_output))
+            print('New loss no ignore index:')
+            print(temp_loss(outputs.contiguous().view(-1, len(self.vocab)), GO_padded_output.contiguous().view(-1)))
+            print('Old loss:')
+            print(self.loss_fn(outputs, GO_padded_output))
+            print('New loss:')
+            print(self.loss_fn(outputs.contiguous().view(-1, len(self.vocab)), GO_padded_output.contiguous().view(-1)))
+            print('New loss contiguous only:')
+            print(self.loss_fn(outputs.contiguous(), GO_padded_output.contiguous()))
+            print('New loss contiguous only no ignore index:')
+            print(temp_loss(outputs.contiguous(), GO_padded_output.contiguous()))
             print('Teacher forcing prob:')
             print(self.tf_prob)
-        self.log("loss", loss)
+        self.log("loss", loss, on_epoch=True, on_step=False)
         if self.tf_prob > self.min_tf_prob:
             self.tf_prob -= 0.000001 # will take 1,000,000 steps to reach 0
          
@@ -273,9 +292,10 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             tgt_padding_mask=GO_pad_mask, memory_key_padding_mask=None)
 
         loss = self.loss_fn(outputs, GO_padded_output)
+        #loss = self.loss_fn(outputs.reshape(-1, len(self.vocab)).contiguous(), GO_padded_output.view(-1).contiguous())
         loss_dict = {'val_loss': loss}
         #self.log_dict(loss_dict)
-        self.log('val_loss', loss)
+        self.log('val_loss', loss, on_epoch=True, on_step=False)
          
         return loss_dict
 
@@ -350,7 +370,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         return desc_log_probs, all_desc_token_probs 
 
 
-    def get_single_seq_set_desc_pair_probs(self, embedding, actual_GO_padded, tgt_mask, GO_pad_mask):
+    def get_single_seq_set_desc_pair_probs(self, embedding, actual_GO_padded, tgt_mask, GO_pad_mask, len_penalty=True):
         # given sequence set embedding and GO description, calculate probability model assigns to the sequence with length penalty
         #import ipdb; ipdb.set_trace()
         start_symbol = 0
@@ -374,13 +394,17 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         correct_token_probs = torch.stack([considered_probs[position, correct_tokens[position]] for position in range(correct_tokens.shape[0])])
         desc_log_prob = torch.sum(correct_token_probs, dim=-1)
         correct_token_probs = correct_token_probs.detach().cpu().numpy()
-
-        desc_log_prob /= len(correct_tokens) # length penalty, no parameter for now
+         
+        if type(len_penalty) == bool and len_penalty:
+            desc_log_prob /= len(correct_tokens) # length penalty, no parameter for now
+        elif type(len_penalty) == float:
+            desc_log_prob /= len(correct_tokens)**len_penalty # length penalty parameter
+        # otherwise no length penalty
 
         return desc_log_prob.item(), correct_token_probs
 
 
-    def classify_seq_set(self, S_padded, S_pad_mask, all_GO_padded, GO_pad_mask):
+    def classify_seq_set(self, S_padded, S_pad_mask, all_GO_padded, GO_pad_mask, len_penalty=True):
         '''
         print('Classify_seq_set shapes:')
         print('S_padded:')
@@ -391,6 +415,12 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         print(all_GO_padded.shape)
         print('GO_pad_mask:')
         print(GO_pad_mask.shape)
+        if type(len_penalty) == bool and len_penalty:
+            print('Len penalty 1.0')
+        elif type(len_penalty) == float:
+            print('Len penalty ' + str(len_penalty))
+        else:
+            print('No len penalty')
         '''
         log_probs = []
         all_desc_token_probs = []
@@ -400,7 +430,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                 src_mask[0].to(self.device), S_pad_mask[0].to(self.device))
         for go_ind in range(all_GO_padded.shape[0]):
             curr_GO_padded = all_GO_padded[go_ind].to(self.device)
-            desc_log_prob, desc_token_probs = self.get_single_seq_set_desc_pair_probs(embedding, curr_GO_padded, tgt_mask[go_ind].to(self.device), GO_pad_mask[go_ind].to(self.device))
+            desc_log_prob, desc_token_probs = self.get_single_seq_set_desc_pair_probs(embedding, curr_GO_padded, tgt_mask[go_ind].to(self.device), GO_pad_mask[go_ind].to(self.device), len_penalty=len_penalty)
             log_probs.append(desc_log_prob)
             all_desc_token_probs.append(desc_token_probs)
 
@@ -415,7 +445,8 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         beam_width = 25
         start_symbol = 0
         end_symbol = self.tgt_vocab_size - 1
-        t = 1.75
+        #t = 1.75
+        #t = 1.0
         if len(pred_batch) == 4:
             S_padded, S_pad_mask, actual_GO_padded, _ = pred_batch
         elif len(pred_batch) == 2:
@@ -460,8 +491,9 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                         prob = torch.softmax(prob.squeeze(), dim=-1)
                         curr_top_probs, curr_top_words = torch.topk(prob, beam_width, dim=-1, largest=True)
                         # Length penalty
-                        curr_log_probs.append((candidate_probs[beam] + torch.log(curr_top_probs))/(len(candidate_sentences[beam]))**t)
-                        #curr_log_probs.append(candidate_probs[beam] + torch.log(curr_top_probs))
+                        #curr_log_probs.append((candidate_probs[beam] + torch.log(curr_top_probs))/(len(candidate_sentences[beam]))**t)
+                        #  no len penalty
+                        curr_log_probs.append(candidate_probs[beam] + torch.log(curr_top_probs))
                         curr_words.append(curr_top_words)
                         keep_inds.append(beam)
                     else:
@@ -487,7 +519,8 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                     assert selected_candidate[-1] != end_symbol
                     new_candidate_sentence = torch.cat([selected_candidate, second_word.unsqueeze(0)])
                     new_candidate_sentences.append(new_candidate_sentence)
-                    new_candidate_probs.append(unended_top_probs[first_word_beam_ind]*(len(new_candidate_sentence))**t)
+                    #new_candidate_probs.append(unended_top_probs[first_word_beam_ind]*(len(new_candidate_sentence))**t)
+                    new_candidate_probs.append(unended_top_probs[first_word_beam_ind])
                 
                 # now concatenate the ended candidates and the new candidates, and do a final ranking
                 all_probs = torch.cat((torch.Tensor(new_candidate_probs), torch.Tensor(log_probs_ended)))

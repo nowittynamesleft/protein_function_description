@@ -40,6 +40,10 @@ def arguments():
             help='how many descriptions to predict to compare to real go terms')
     args.add_argument('--test', action='store_true', 
             help='code testing flag, do not save model checkpoints, only train on num_pred_terms GO terms')
+    args.add_argument('--classify', action='store_true', 
+            help='Classify the test dataset into the available GO terms of the test dataset')
+    args.add_argument('--generate', action='store_true', 
+            help='Generate descriptions for the test dataset protein sets')
     args.add_argument('--load_vocab', type=str, default=None, 
             help='Load vocab from pickle file instead of assuming all description vocab is included in annot_seq_file')
 
@@ -56,10 +60,10 @@ class MetricsCallback(Callback):
         self.metrics['val_loss'] = []
 
     def on_train_epoch_end(self, trainer, pl_module):
-        self.metrics['loss'].append(trainer.logged_metrics['loss'])
+        self.metrics['loss'].append(trainer.logged_metrics['loss_epoch'])
     
     def on_validation_epoch_end(self, trainer, pl_module):
-        self.metrics['val_loss'].append(trainer.logged_metrics['val_loss'])
+        self.metrics['val_loss'].append(trainer.logged_metrics['val_loss_epoch'])
 
 def convert_preds_to_words(predictions, vocab):
     # converts all predictions in a set of batches to words in a num_batches-length list of batch_size-length lists of sentence-length lists of strings
@@ -170,7 +174,6 @@ def predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset,
     
     preds = [pred for batch in pred_output for pred in batch[0]]
     probs = [prob for batch in pred_output for prob in batch[1]]
-    import ipdb; ipdb.set_trace()
     word_preds = convert_sample_preds_to_words(preds, model.vocab)
     outfile = open(save_prefix + '_subsample_prot_preds.txt', 'w')
     for pred in range(preds):
@@ -244,6 +247,9 @@ def classification(model, dataset, save_prefix='no_prefix', subsample=False):
         dataloaders, _, included_go_inds = get_individual_go_term_dataloaders(dataset, len(dataset), max_seq_set_size=128) # do somewhat specific ones just to take less time...
     preds = []
     all_pred_token_probs = []
+    # no len penalty
+    preds_2 = []
+    all_pred_token_probs_2 = []
     # tqdm progress bar
     print(str(len(included_go_inds)) + "-way zero-shot classification.")
     if subsample:
@@ -256,23 +262,33 @@ def classification(model, dataset, save_prefix='no_prefix', subsample=False):
         S_padded, S_mask = seq_go_collate_pad([seq_set], seq_set_size=len(seq_set[0]))
         #S_padded = S_padded.to(model.device)
         #S_mask = S_mask.to(model.device)
-        seq_set_desc_probs, seq_set_desc_token_probs = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks) # batch sizes of 1 each, index out of it
+        seq_set_desc_probs, seq_set_desc_token_probs = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks, len_penalty=True) # batch sizes of 1 each, index out of it
+        seq_set_desc_probs_2, seq_set_desc_token_probs_2 = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks, len_penalty=False) # batch sizes of 1 each, index out of it
         preds.append(seq_set_desc_probs)
         all_pred_token_probs.append(seq_set_desc_token_probs)
         #preds.append(seq_set_desc_probs)
+        preds_2.append(seq_set_desc_probs_2)
+        all_pred_token_probs_2.append(seq_set_desc_token_probs_2)
 
     #acc = accuracy_score(preds, included_go_inds)
-    preds = torch.tensor(preds).transpose(0,1)
+    #import ipdb; ipdb.set_trace()
+    #preds = torch.tensor(preds).transpose(0,1)
+    preds = torch.tensor(preds)
     included_go_inds = torch.tensor(included_go_inds)
+    preds_2 = torch.tensor(preds_2)
     pred_outdict = {'seq_set_go_term_inds': included_go_inds, 'all_term_preds': preds, 'all_term_token_probs': seq_set_desc_token_probs, 'go_descriptions': np.array(dataset.go_descriptions)}
     pickle.dump(pred_outdict, open(save_prefix + '_pred_dict.pckl', 'wb'))
 
     if len(preds) < 1000:
         accs = accuracy(preds, included_go_inds, topk=(5, 4, 3, 2, 1))
-        print('Top 5, 4, 3, 2, 1 accuracies: ' + str(accs))
+        print('Len penalty: Top 5, 4, 3, 2, 1 accuracies: ' + str(accs))
+        accs_2 = accuracy(preds_2, included_go_inds, topk=(5, 4, 3, 2, 1))
+        print('No len penalty: Top 5, 4, 3, 2, 1 accuracies: ' + str(accs_2))
     else:
         accs = accuracy(preds, included_go_inds, topk=(1000, 500, 100, 50, 10, 5, 1))
-        print('Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs))
+        print('Len penalty Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs))
+        accs_2 = accuracy(preds_2, included_go_inds, topk=(1000, 500, 100, 50, 10, 5, 1))
+        print('No len penalty Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs_2))
 
     #aupr = micro_aupr(preds, dataset.go_annot_mat)
 
@@ -334,15 +350,17 @@ if __name__ == '__main__':
         test_dataset = SequenceGOCSVDataset(args.test_annot_seq_file, obofile, seq_set_len, vocab=x.vocab)
         test_dl = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
 
-    metric_callback = MetricsCallback()
-    #early_stopping_callback = EarlyStopping(monitor="val_loss", min_delta=0.00, patience=10)
+    #metric_callback = MetricsCallback()
+    early_stopping_callback = EarlyStopping(monitor="val_loss", min_delta=0.00, patience=10)
     csv_logger = CSVLogger('lightning_logs', name=(args.save_prefix + '_experiment'))
     #trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs, auto_select_gpus=True,  # mixed precision causes nan loss, so back to regular precision.
             #callbacks=metric_callback, strategy=DDPPlugin(find_unused_parameters=False), checkpoint_callback=(not args.test), logger=(not args.test))
     #trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs,  # mixed precision causes nan loss, so back to regular precision.
     #        callbacks=[metric_callback, early_stopping_callback], logger=csv_logger)
+    #trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs,  # mixed precision causes nan loss, so back to regular precision.
+    #        callbacks=[metric_callback], logger=csv_logger)
     trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs,  # mixed precision causes nan loss, so back to regular precision.
-            callbacks=[metric_callback], logger=csv_logger)
+            callbacks=[early_stopping_callback], logger=csv_logger)
 
     if args.load_model_predict is None:
         if args.load_model is not None:
@@ -359,9 +377,9 @@ if __name__ == '__main__':
         trainer.fit(model, train_dl, val_dl)
         #dataloader = DataLoader(x, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
         #trainer.fit(model, dataloader)
-        logged_metrics = metric_callback.metrics
-        print('Logged_metrics')
-        print(logged_metrics)
+        #logged_metrics = metric_callback.metrics
+        #print('Logged_metrics')
+        #print(logged_metrics)
     else:
         print('Loading model for predicting only: ' + args.load_model_predict)
         ckpt = torch.load(args.load_model_predict)
@@ -371,8 +389,15 @@ if __name__ == '__main__':
     print(model.tf_prob)
     #average_true_desc_prob = predict_all_prots_of_go_term(trainer, model, num_pred_terms, args.save_prefix, x, evaluate_probs=True)
     model.to('cuda:0')
-    print('Classfication after whole script:')
-    preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, subsample=True)
+    if args.classify:
+        print('Classfication after whole script:')
+        preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, subsample=True)
+    if args.generate:
+        print('Generation after whole script:')
+        if model.pred_pair_probs:
+            model.pred_pair_probs = False
+        trainer.predict(model, test_dl)
+
     #print('Predict test:')
     #model.pred_pair_probs = True
     #trainer.predict(model, test_dl)
