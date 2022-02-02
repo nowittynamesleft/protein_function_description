@@ -108,8 +108,7 @@ class LengthConverter(pl.LightningModule):
 class SeqSet2SeqTransformer(pl.LightningModule):
     def __init__(self, num_encoder_layers: int, num_decoder_layers: int,
                  emb_size: int, src_vocab_size: int, tgt_vocab_size: int,
-                 dim_feedforward:int = 512, num_heads: int = 1, dropout:float = 0.1, vocab=None,
-                 min_tf_prob=1.0):
+                 dim_feedforward:int = 512, num_heads: int = 1, dropout:float = 0.1, vocab=None):
         super(SeqSet2SeqTransformer, self).__init__()
         encoder_layer = TransformerEncoderLayer(d_model=emb_size, nhead=num_heads,
                                                 dim_feedforward=dim_feedforward, batch_first=True)
@@ -124,11 +123,10 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         self.tgt_vocab_size = tgt_vocab_size
         self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout)
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=0) # ignore padding in calculating loss; 0 is padding index
+        #self.loss_fn = nn.CrossEntropyLoss()
         self.len_convert = LengthConverter()
         self.max_desc_len = 100
         self.vocab = vocab
-        self.tf_prob = 1.0
-        self.min_tf_prob = min_tf_prob # default is 1.0, so all teacher forcing; no decrease in ground truth sample probability
         self.pred_pair_probs = False
 
     def convert_batch_preds_to_words(self, batch):
@@ -148,46 +146,10 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         return ls
 
 
-    def scheduled_sampling_MM(self, trg, avg_src_transformed_embed, tgt_mask, tgt_padding_mask, teacher_force=1.0):
-        # Based on description from Mihaylova and Martins 2019
-        # create reference sequence by computing one-by-one the target tokens 
-        #import ipdb; ipdb.set_trace()
-        with torch.no_grad():
-            tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg).unsqueeze(0))
-            outs = self.transformer_decoder(tgt_emb, avg_src_transformed_embed, 
-                    tgt_mask, None, tgt_padding_mask, None) # memory key padding is always assumed to be None
-            predicted_tokens = torch.max(self.generator(outs), dim=-1)[1].squeeze(0)
-            pred_tokens_shifted = torch.cat((torch.zeros(1, device=self.device, dtype=torch.long), predicted_tokens[:-1]))
-            truth_or_pred = torch.rand(len(trg)).to(self.device) < teacher_force
-            reference_desc = torch.where(truth_or_pred, trg, pred_tokens_shifted)
-
-        # second decoding based on reference
-        tgt_emb = self.positional_encoding(self.tgt_tok_emb(reference_desc).unsqueeze(0))
-        outs = self.transformer_decoder(tgt_emb, avg_src_transformed_embed, 
-                tgt_mask, None, tgt_padding_mask, None) # memory key padding is always assumed to be None
-        return outs
-    
-
     def forward(self, src: Tensor, trg: Tensor, src_mask: Tensor,
                 tgt_mask: Tensor, src_padding_mask: Tensor,
                 tgt_padding_mask: Tensor, memory_key_padding_mask: Tensor):
         
-        '''
-        print('forward shapes:')
-        print('S_padded:')
-        print(src.shape)
-        print('src_mask:')
-        print(src_mask.shape)
-        print('S_pad_mask:')
-        print(src_padding_mask.shape)
-        print('all_GO_padded:')
-        print(trg.shape)
-        print('GO_pad_mask:')
-        print(tgt_padding_mask.shape)
-        print('tgt_mask:')
-        print(tgt_mask.shape)
-        '''
-
         src_transformed_list = []
         outputs = []
         #print(src.shape)
@@ -196,32 +158,20 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         
         for i in range(src.shape[0]): # seq set in batch
 
-            '''
-            src_emb = self.positional_encoding(self.src_tok_emb(src[i, :, :]))
-            print(src_emb.shape)
-            transformed_embeds = torch.cat([self.transformer_encoder(src_emb[j, :].unsqueeze(0), src_mask[i, j, :], src_padding_mask[i, j, :].unsqueeze(0)) for j in range(src.shape[1])])
+            # Do I even need a padding mask for the GO descriptions? I'm removing those from the loss anyway
+            # I don't think I need a sequence mask either, it's all zeros anyway
+            avg_src_transformed_embed = self.encode_seq_set(src[i, ...], None, src_padding_mask[i, ...])
+            logits = self.decode(trg[i, :].unsqueeze(0), avg_src_transformed_embed, tgt_mask[i,:])
+            outputs.append(logits)
             
-            len_trans_embeds, _ = self.len_convert(transformed_embeds, self._max_lens(src_padding_mask[i, ...]), src_padding_mask[i, ...].float())
-
-            avg_src_transformed_embed = torch.mean(len_trans_embeds, dim=0).unsqueeze(0)
-            '''
-            avg_src_transformed_embed = self.encode_seq_set(src[i, ...], src_mask[i, ...], src_padding_mask[i, ...])
-            #outs = self.decode(trg[i, :], avg_src_transformed_embed, tgt_mask[i,:])
-            tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg[i, :]).unsqueeze(0))
-            outs = self.transformer_decoder(tgt_emb, avg_src_transformed_embed, 
-                     tgt_mask[i, :], None, tgt_padding_mask[i, :].unsqueeze(0), None) # memory key padding is always assumed to be None
-            # removing scheduled sampling!!!
-            #outs = self.scheduled_sampling_MM(trg[i, :], avg_src_transformed_embed, tgt_mask[i, :], tgt_padding_mask[i, :].unsqueeze(0), teacher_force=self.tf_prob)
-            outputs.append(self.generator(outs))
-            
-        outputs = torch.stack(outputs).squeeze(1)
+        outputs = torch.cat(outputs)
         outputs = outputs.transpose(1,2)
         return outputs
 
 
     def encode_seq_set(self, src, src_mask, src_padding_mask):
         #import ipdb; ipdb.set_trace()
-        transformed_embeds = torch.cat([self.encode(src[j, :].unsqueeze(0), src_mask[j, :], src_padding_mask[j, :].unsqueeze(0)) for j in range(src.shape[0])])
+        transformed_embeds = torch.cat([self.encode(src[j, :].unsqueeze(0), None, src_padding_mask[j, :].unsqueeze(0)) for j in range(src.shape[0])])
         len_trans_embeds, _ = self.len_convert(transformed_embeds, self._max_lens(src_padding_mask), ~src_padding_mask.bool()) # len convert seems to have strange behavior (all features at a given position are the same after it)
         # len convert expects src_padding_mask to be all positions that HAVE tokens, so it is inverted here.
         avg_src_transformed_embed = torch.mean(len_trans_embeds, dim=0).unsqueeze(0)
@@ -232,14 +182,17 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         S_padded, S_pad_mask, GO_padded_all, GO_pad_mask = train_batch 
         GO_padded_input = GO_padded_all[:, :-1]
         GO_padded_output = GO_padded_all[:, 1:]
-        GO_pad_mask = GO_pad_mask[:, :-1]
+        # adding explicit input and output masks for clarity
+        GO_pad_mask_input = GO_pad_mask[:, :-1]
+        GO_pad_mask_output = GO_pad_mask[:, 1:]
         src_mask, tgt_mask = create_mask(S_padded, GO_padded_input, device=self.device)
 
-        outputs = self(src=S_padded, trg=GO_padded_input, src_mask=src_mask, 
+        outputs = self(src=S_padded, trg=GO_padded_input, src_mask=None, 
             tgt_mask=tgt_mask, src_padding_mask=S_pad_mask,
-            tgt_padding_mask=GO_pad_mask, memory_key_padding_mask=None)
+            tgt_padding_mask=GO_pad_mask_input, memory_key_padding_mask=None)
 
         #print(outputs.shape)
+        
         _, preds = outputs.max(axis=1)
         #print(self.convert_batch_preds_to_words(preds))
         #print(GO_padded_output.shape)
@@ -247,8 +200,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
 
         #loss = self.loss_fn(outputs.contiguous().view(-1, len(self.vocab)), GO_padded_output.contiguous().view(-1))
         #loss = self.loss_fn(outputs.reshape(-1, len(self.vocab)).contiguous(), GO_padded_output.view(-1).contiguous())
-        loss = self.loss_fn(outputs, GO_padded_output)
-        #import ipdb; ipdb.set_trace()
+        loss = self.loss_fn(outputs, GO_padded_output) # loss function should ignore padding index (0)
         #self.log_dict({'loss': loss, 'sample_output': outputs[0]})
         #self.log_dict({'loss': loss})
         if batch_idx == 0:
@@ -256,26 +208,8 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             print(self.convert_batch_preds_to_words(preds))
             print('Actual description:')
             print(self.convert_batch_preds_to_words(GO_padded_output))
-            print('Loss, reshape then contiguous:')
-            print(self.loss_fn(outputs.reshape(-1, len(self.vocab)).contiguous(), GO_padded_output.view(-1).contiguous()))
-            temp_loss = nn.CrossEntropyLoss()
-            print('Old loss no ignore index:')
-            print(temp_loss(outputs, GO_padded_output))
-            print('New loss no ignore index:')
-            print(temp_loss(outputs.contiguous().view(-1, len(self.vocab)), GO_padded_output.contiguous().view(-1)))
-            print('Old loss:')
-            print(self.loss_fn(outputs, GO_padded_output))
-            print('New loss:')
-            print(self.loss_fn(outputs.contiguous().view(-1, len(self.vocab)), GO_padded_output.contiguous().view(-1)))
-            print('New loss contiguous only:')
-            print(self.loss_fn(outputs.contiguous(), GO_padded_output.contiguous()))
-            print('New loss contiguous only no ignore index:')
-            print(temp_loss(outputs.contiguous(), GO_padded_output.contiguous()))
-            print('Teacher forcing prob:')
-            print(self.tf_prob)
-        self.log("loss", loss, on_epoch=True, on_step=False)
-        if self.tf_prob > self.min_tf_prob:
-            self.tf_prob -= 0.000001 # will take 1,000,000 steps to reach 0
+            print('Loss for this batch: ' + str(loss))
+        self.log("loss", loss, on_epoch=True, on_step=False, prog_bar=True)
          
         return {'loss': loss}
     
@@ -284,48 +218,22 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         S_padded, S_pad_mask, GO_padded_all, GO_pad_mask = valid_batch 
         GO_padded_input = GO_padded_all[:, :-1]
         GO_padded_output = GO_padded_all[:, 1:]
-        GO_pad_mask = GO_pad_mask[:, :-1]
+        GO_pad_mask_input = GO_pad_mask[:, :-1]
+        GO_pad_mask_output = GO_pad_mask[:, 1:]
         src_mask, tgt_mask = create_mask(S_padded, GO_padded_input, device=self.device)
+        #import ipdb; ipdb.set_trace()
 
-        outputs = self(src=S_padded, trg=GO_padded_input, src_mask=src_mask, 
+        outputs = self(src=S_padded, trg=GO_padded_input, src_mask=None, 
             tgt_mask=tgt_mask, src_padding_mask=S_pad_mask,
-            tgt_padding_mask=GO_pad_mask, memory_key_padding_mask=None)
+            tgt_padding_mask=GO_pad_mask_input, memory_key_padding_mask=None)
 
         loss = self.loss_fn(outputs, GO_padded_output)
         #loss = self.loss_fn(outputs.reshape(-1, len(self.vocab)).contiguous(), GO_padded_output.view(-1).contiguous())
         loss_dict = {'val_loss': loss}
         #self.log_dict(loss_dict)
-        self.log('val_loss', loss, on_epoch=True, on_step=False)
+        self.log('val_loss', loss, on_epoch=True, on_step=False, prog_bar=True)
          
         return loss_dict
-
-    def test_step(self, test_batch, batch_idx):
-        S_padded, S_pad_mask, GO_padded, GO_pad_mask = test_batch 
-        src_mask, tgt_mask = create_mask(S_padded, GO_padded, device=self.device)
-
-        preds = self.predict_step(test_batch, batch_idx)
-
-        #_, preds = outputs.max(axis=1)
-        acc = 0
-        #import ipdb; ipdb.set_trace()
-        end_symbol = self.tgt_vocab_size - 1
-        for i in range(len(preds)):
-            curr_GO_padded = GO_padded[i]
-            stripped_ind_list = []
-            for val in curr_GO_padded:
-                symbol = val.item()
-                stripped_ind_list.append(symbol)
-                if symbol == end_symbol:
-                    break
-            # stripped_ind_list now has only tokens that are before and including <EOS>
-            try:
-                if preds[i].tolist() == stripped_ind_list:
-                    acc += 1
-            except RuntimeError:
-                pass
-        #loss = self.loss_fn(outputs, GO_padded)
-        acc /= len(preds)
-        self.log_dict({'acc': acc})
 
 
     def detect_description_duplicates(self, descriptions):
@@ -338,8 +246,8 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         return False
 
 
-    def get_seq_set_desc_pair_probs(self, pred_batch):
-        # get correct sequence set GO description pair probabilities
+    def get_seq_set_desc_pair_logits(self, pred_batch):
+        # get correct sequence set GO description pair logits
         assert 'cuda' in str(self.device)
         #import ipdb; ipdb.set_trace()
         start_symbol = 0
@@ -348,8 +256,8 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         src_mask, tgt_mask = create_mask(S_padded, actual_GO_padded[:, :-1], device=self.device) # create description mask only for input
         num_sets = S_padded.shape[0]
 
-        desc_log_probs = []
-        all_desc_token_probs = []
+        desc_logits = []
+        all_desc_token_logits = []
         for seq_set_ind in range(num_sets):
             #print(str(seq_set_ind) + ' out of ' + str(num_sets) + ' sequence sets.')
             curr_actual_GO_padded = actual_GO_padded[seq_set_ind]
@@ -358,83 +266,68 @@ class SeqSet2SeqTransformer(pl.LightningModule):
 
             embedding = self.encode_seq_set(S_padded[seq_set_ind, ...], 
                     src_mask[seq_set_ind, ...], S_pad_mask[seq_set_ind, ...])
-            desc_log_prob, correct_token_probs = self.get_single_seq_set_desc_pair_probs(embedding, curr_actual_GO_padded, curr_tgt_mask, curr_GO_pad_mask)
-            #desc_log_prob = self.get_single_seq_set_desc_pair_probs(embedding, curr_actual_GO_padded_input, curr_actual_GO_padded_output, curr_GO_pad_mask_input, curr_GO_pad_mask_output)
+            desc_logit, correct_token_logits = self.get_single_seq_set_desc_pair_logits(embedding, curr_actual_GO_padded, curr_tgt_mask, curr_GO_pad_mask)
+            desc_logits.append(desc_logit)
+            all_desc_token_logits.append(correct_token_logits)
 
-            desc_log_probs.append(desc_log_prob)
-            all_desc_token_probs.append(correct_token_probs)
+        desc_logits = torch.Tensor(desc_logits)
+        all_desc_token_logits = torch.Tensor(all_desc_token_logits)
 
-        desc_log_probs = torch.Tensor(desc_log_probs)
-        all_desc_token_probs = torch.Tensor(all_desc_token_probs)
-
-        return desc_log_probs, all_desc_token_probs 
+        return desc_logits, all_desc_token_logits 
 
 
-    def get_single_seq_set_desc_pair_probs(self, embedding, actual_GO_padded, tgt_mask, GO_pad_mask, len_penalty=True):
+    def get_single_seq_set_desc_pair_logits(self, avg_src_transformed_embed, actual_GO_padded, tgt_mask, GO_pad_mask, len_penalty=True):
         # given sequence set embedding and GO description, calculate probability model assigns to the sequence with length penalty
         #import ipdb; ipdb.set_trace()
         start_symbol = 0
         end_symbol = self.tgt_vocab_size - 1
-        desc_log_prob = 0
+        desc_logit = 0
 
         #import ipdb; ipdb.set_trace()
-        actual_GO_padded_input = actual_GO_padded[:-1]
-        actual_GO_padded_output = actual_GO_padded[1:]
-        tgt_emb = self.positional_encoding(self.tgt_tok_emb(actual_GO_padded_input).unsqueeze(0)) # only input for getting description representation for decoder
-        GO_pad_mask_input = GO_pad_mask[:-1]
-        GO_pad_mask_output = GO_pad_mask[1:]
+        actual_GO_padded_input = actual_GO_padded[:, :-1]
+        actual_GO_padded_output = actual_GO_padded[:, 1:]
+        #GO_pad_mask_input = GO_pad_mask[:-1]
+        GO_pad_mask_output = GO_pad_mask[:,1:]
 
-        outputs = self.transformer_decoder(tgt_emb, embedding, 
-                tgt_mask, None, GO_pad_mask_input.unsqueeze(0), None) # memory key padding is always assumed to be None, don't need attention mask to hide next description tokens from model
+
+        logits = self.decode(actual_GO_padded_input, avg_src_transformed_embed, tgt_mask)
+        #tgt_emb = self.positional_encoding(self.tgt_tok_emb(actual_GO_padded_input).unsqueeze(0)) # only input for getting description representation for decoder
+
+        #outputs = self.transformer_decoder(tgt_emb, embedding, 
+                #tgt_mask, None, GO_pad_mask_input.unsqueeze(0), None) # memory key padding is always assumed to be None, don't need attention mask to hide next description tokens from model
         #outs = self.scheduled_sampling_MM(trg[i, :], avg_src_transformed_embed, tgt_mask[i, :], tgt_padding_mask[i, :].unsqueeze(0), teacher_force=self.tf_prob)
-        probs = self.generator(outputs).squeeze()
+        #probs = self.generator(outputs).squeeze()
             
-        considered_probs = probs[~GO_pad_mask_output]
+        considered_logits = logits[~GO_pad_mask_output]
         correct_tokens = actual_GO_padded_output[~GO_pad_mask_output]
-        correct_token_probs = torch.stack([considered_probs[position, correct_tokens[position]] for position in range(correct_tokens.shape[0])])
-        desc_log_prob = torch.sum(correct_token_probs, dim=-1)
-        correct_token_probs = correct_token_probs.detach().cpu().numpy()
+        correct_token_logits = torch.stack([considered_logits[position, correct_tokens[position]] for position in range(correct_tokens.shape[0])])
+        desc_logit = torch.sum(correct_token_logits, dim=-1)
+        correct_token_logits = correct_token_logits.detach().cpu().numpy()
          
         if type(len_penalty) == bool and len_penalty:
-            desc_log_prob /= len(correct_tokens) # length penalty, no parameter for now
+            desc_logit /= len(correct_tokens) # length penalty, no parameter for now
         elif type(len_penalty) == float:
-            desc_log_prob /= len(correct_tokens)**len_penalty # length penalty parameter
+            desc_logit /= len(correct_tokens)**len_penalty # length penalty parameter
         # otherwise no length penalty
 
-        return desc_log_prob.item(), correct_token_probs
+        return desc_logit.item(), correct_token_logits
 
 
     def classify_seq_set(self, S_padded, S_pad_mask, all_GO_padded, GO_pad_mask, len_penalty=True):
-        '''
-        print('Classify_seq_set shapes:')
-        print('S_padded:')
-        print(S_padded.shape)
-        print('S_pad_mask:')
-        print(S_pad_mask.shape)
-        print('all_GO_padded:')
-        print(all_GO_padded.shape)
-        print('GO_pad_mask:')
-        print(GO_pad_mask.shape)
-        if type(len_penalty) == bool and len_penalty:
-            print('Len penalty 1.0')
-        elif type(len_penalty) == float:
-            print('Len penalty ' + str(len_penalty))
-        else:
-            print('No len penalty')
-        '''
-        log_probs = []
-        all_desc_token_probs = []
+        desc_logits = []
+        all_desc_token_logits = []
         src_mask, tgt_mask = create_mask(S_padded, all_GO_padded[:, :-1], device=self.device) # create mask only for input
         #import ipdb; ipdb.set_trace()
         embedding = self.encode_seq_set(S_padded[0].to(self.device), 
                 src_mask[0].to(self.device), S_pad_mask[0].to(self.device))
         for go_ind in range(all_GO_padded.shape[0]):
             curr_GO_padded = all_GO_padded[go_ind].to(self.device)
-            desc_log_prob, desc_token_probs = self.get_single_seq_set_desc_pair_probs(embedding, curr_GO_padded, tgt_mask[go_ind].to(self.device), GO_pad_mask[go_ind].to(self.device), len_penalty=len_penalty)
-            log_probs.append(desc_log_prob)
-            all_desc_token_probs.append(desc_token_probs)
+            #import ipdb; ipdb.set_trace()
+            desc_logit, desc_token_logits = self.get_single_seq_set_desc_pair_logits(embedding, curr_GO_padded.unsqueeze(0), tgt_mask[go_ind].to(self.device), GO_pad_mask[go_ind].unsqueeze(0).to(self.device), len_penalty=len_penalty)
+            desc_logits.append(desc_logit)
+            all_desc_token_logits.append(desc_token_logits)
 
-        return log_probs, all_desc_token_probs
+        return desc_logits, all_desc_token_logits
 
 
     def beam_search(self, pred_batch):
@@ -446,7 +339,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         start_symbol = 0
         end_symbol = self.tgt_vocab_size - 1
         #t = 1.75
-        #t = 1.0
+        t = 1.0
         if len(pred_batch) == 4:
             S_padded, S_pad_mask, actual_GO_padded, _ = pred_batch
         elif len(pred_batch) == 2:
@@ -454,13 +347,12 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         num_sets = S_padded.shape[0]
         GO_padded = [torch.ones((1)).fill_(start_symbol).type(torch.long).to(self.device) for i in range(num_sets)] # start GO description off with start token
 
-        src_mask = torch.zeros((S_padded.shape[0], S_padded.shape[1], S_padded.shape[2], S_padded.shape[2]), device=self.device).type(torch.bool)
         all_final_candidate_sentences = []
         all_final_candidate_probs = []
 
         for seq_set_ind in range(num_sets):
             #import ipdb; ipdb.set_trace()
-            embedding = self.encode_seq_set(S_padded[seq_set_ind, ...], src_mask[seq_set_ind, ...], S_pad_mask[seq_set_ind, ...])
+            embedding = self.encode_seq_set(S_padded[seq_set_ind, ...], None, S_pad_mask[seq_set_ind, ...])
 
             curr_GO_padded = GO_padded[seq_set_ind]
             # init candidate sentences
@@ -570,19 +462,17 @@ class SeqSet2SeqTransformer(pl.LightningModule):
 
 
     def get_next_token_probs(self, curr_GO_padded, embedding):
-        tgt_mask = (generate_square_subsequent_mask(curr_GO_padded.size(0))).to(self.device)
+        #tgt_mask = (generate_square_subsequent_mask(curr_GO_padded.size(0))).to(self.device) # this is actually unnecessary since this function assumes the whole sequence is known, predicting the next token only
         tgt_emb = self.positional_encoding(self.tgt_tok_emb(curr_GO_padded).unsqueeze(0))
-        out = self.transformer_decoder(tgt_emb, embedding, 
-                None, None, None, None) # memory key padding is always assumed to be None
+        out = self.transformer_decoder(tgt_emb, embedding) # No masks for this
         out = out.transpose(1, 2)
         prob = self.generator(out[:, :, -1])
         return out, prob
 
     def greedy_decode(model, src, src_mask, max_len, start_symbol):
         src = src.to(device)
-        src_mask = src_mask.to(device)
 
-        memory = model.encode(src, src_mask)
+        memory = model.encode(src, None)
         ys = torch.ones(1, 1).fill_(start_symbol).type(torch.long).to(device)
         for i in range(max_len-1):
             memory = memory.to(device)
@@ -612,8 +502,13 @@ class SeqSet2SeqTransformer(pl.LightningModule):
 
     def decode(self, tgt: Tensor, memory: Tensor, tgt_mask: Tensor):
         #import ipdb; ipdb.set_trace()
-        return self.transformer_decoder(self.positional_encoding(
-                          self.tgt_tok_emb(tgt)), memory, tgt_mask)
+        tgt_emb = self.positional_encoding(self.tgt_tok_emb(tgt)) # only input for getting description representation for decoder
+        decoded = self.transformer_decoder(tgt_emb, memory, tgt_mask)
+        #outputs = self.transformer_decoder(tgt_emb, embedding, 
+                #tgt_mask=tgt_mask, None, GO_pad_mask_input.unsqueeze(0), None) # memory key padding is always assumed to be None, don't need attention mask to hide next description tokens from model
+        logits = self.generator(decoded)
+
+        return logits
 
 
 def generate_square_subsequent_mask(sz, device=None):

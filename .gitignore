@@ -1,0 +1,13 @@
+*.out
+*.pckl
+*.log
+*.csh
+*.fa
+*.fasta
+*.csv
+*.tsv
+*.err
+*.tab
+*.gz
+*.txt
+!requirements.txt

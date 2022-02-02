@@ -39,6 +39,7 @@ class SequenceDataset(Dataset):
     def __len__(self):
         return len(self.seqs)
 
+
 class SequenceGOCSVDataset(Dataset):
     """
     Sequence GO Dataset class with descriptions.
@@ -51,7 +52,6 @@ class SequenceGOCSVDataset(Dataset):
 
     for each GO_ID:
         split sequences by comma, these are the list for that GO_ID
-
 
     """
     def __init__(self, go_file, obo_file, num_samples, vocab=None, include_go=True, save_prefix='no_prefix'):
@@ -158,11 +158,6 @@ def seq_go_collate_pad(batch, seq_set_size=None):
     Batch size X 2 (if GO included) list of tuples
     first index of tuple is sequence set of batch, so seq_set_size X 
     """
-    # TODO: decide whether the data will be one hot already or sequences...
-    # No, it should be indices and not one hot so that the embedding layer can handle it easier
-    # get sequence lengths and pad them
-    # lengths = torch.tensor([t[0].shape[0] for t in batch]).to(device)
-    #import ipdb; ipdb.set_trace()
     if len(batch[0]) == 2: # check whether there is a GO description set attached
         GO_present = True
     else:
@@ -173,6 +168,7 @@ def seq_go_collate_pad(batch, seq_set_size=None):
         for i, (seq_set, go_term_desc) in enumerate(batch):
             go_desc_lengths.append(len(go_term_desc))
             lengths.append([])
+            assert seq_set_size == len(seq_set)
             for j, seq in enumerate(seq_set):
                 lengths[-1].append(len(seq))
         max_go_desc_length = max(go_desc_lengths)
@@ -195,7 +191,7 @@ def seq_go_collate_pad(batch, seq_set_size=None):
     S_padded = torch.zeros((len(batch), seq_set_size, max_len))
     #S_padded[:, :seq_set_size, :] = len(CHARS) # add "no residue" entries in one-hot matrix
 
-    # pad
+    # Sequence padding
     for i in range(len(batch)):
         if GO_present:
             (seq_set, _) = batch[i]
@@ -210,7 +206,6 @@ def seq_go_collate_pad(batch, seq_set_size=None):
         
     # handle GO descriptions. Pad max length of the GO description?
     if GO_present:
-    #GO_padded[:, :] = len(vocab) # padding token is last
 
         batch_go_descs = [torch.from_numpy(np.array(go_desc)) for (_, go_desc) in batch]
         GO_padded, GO_mask = pad_GO(batch_go_descs)
@@ -234,77 +229,6 @@ def pad_GO(go_descs):
     return GO_padded, GO_mask
 
 
-class SequenceKeywordDataset(Dataset):
-    def __init__(self, fasta_fname, keyword_file):
-        id2seq = load_fasta(fasta_fname)
-        self.keyword_dict = pickle.load(open(keyword_file, 'rb'))
-        self.keyword_df = self.keyword_dict['keyword_df']
-        self.keywords = np.array(self.keyword_df['keyword_inds'])
-        self.seqs = np.array([seq2onehot(id2seq[prot]) for prot in self.keyword_df['Entry']])
-        self.all_keywords = self.keyword_dict['all_keywords']
-        self.prot_list = self.keyword_df['Entry'].tolist()
-
-    def __getitem__(self, index):
-        return (self.seqs[index], self.keywords[index])
-
-    def __len__(self):
-        return len(self.prot_list)
-
-
-def previous_seq_kw_collate_pad(batch, device=None, max_len=1000):
-    """
-    Pads matrices of variable length
-    Takes a batch_size-length list of (protein_length, alphabet_size) 
-    numpy arrays and turns it into (batch_size, alphabet_size, length) PyTorch tensors.
-    Switches the alphabet size and length to interface with pytorch conv1d layer.
-    """
-    # get sequence lengths
-    #lengths = torch.tensor([t[0].shape[0] for t in batch]).to(device)
-    print(batch)
-    (seq_batch, keywords_list_batch) = batch
-    lengths = torch.tensor([t.shape[0] for t in seq_batch]).to(device)
-    S_padded = torch.zeros((len(batch), len(CHARS), max_len)).to(device)
-    S_padded[:, len(CHARS) - 1, :] = 1 # add "no residue" entries in one-hot matrix
-
-    # pad
-    for i in range(len(batch)):
-        if max_len >= lengths[i]:
-            S_padded[i][:, :lengths[i]] = torch.from_numpy(batch[i].transpose())
-        else:
-            S_padded[i][:, :max_len] = torch.from_numpy(batch[i][:max_len, :].transpose())
-
-    batch_keywords = [torch.from_numpy(np.array(keyword_inds)).to(device) for keyword_inds in keywords_list_batch]
-    return (S_padded, batch_keywords)
-
-
-def seq_kw_collate_pad(batch, max_len=1000):
-    """
-    Pads matrices of variable length
-    Takes a batch_size-length list of (protein_length, alphabet_size) numpy arrays and 
-    turns it into (batch_size, alphabet_size, length) PyTorch tensors.
-    Switches the alphabet size and length to interface with pytorch conv1d layer.
-    """
-    # get sequence lengths
-    #lengths = torch.tensor([t[0].shape[0] for t in batch]).to(device)
-    lengths = []
-    for (seq, keywords_list) in batch:
-        lengths.append(seq.shape[0])
-    lengths = torch.tensor(lengths)
-    S_padded = torch.zeros((len(batch), len(CHARS), max_len))
-    S_padded[:, len(CHARS) - 1, :] = 1 # add "no residue" entries in one-hot matrix
-
-    # pad
-    for i in range(len(batch)):
-        (seq, _) = batch[i]
-        if max_len >= lengths[i]:
-            S_padded[i][:, :lengths[i]] = torch.from_numpy(seq.transpose())
-        else:
-            S_padded[i][:, :max_len] = torch.from_numpy(seq[:max_len, :].transpose())
-
-    batch_keywords = [torch.from_numpy(np.array(keyword_inds)) for (_, keyword_inds) in batch]
-    return S_padded, batch_keywords
-
-
 def create_annot_mat(prot_ids, go_terms, go2prot_ids):
     annot_mat = np.zeros((len(prot_ids), len(go_terms)), dtype=bool)
     prot_id2annot_ind = dict(zip(prot_ids, range(len(prot_ids))))
@@ -316,22 +240,3 @@ def create_annot_mat(prot_ids, go_terms, go2prot_ids):
     
     return annot_mat
 
-
-
-
-def get_data_loader(fasta_fname, keyword_file, batch_size, device=None):
-    seq_key_dataset = SequenceKeywordDataset(fasta_fname, keyword_file)
-
-    print('First sequence one-hot shape')
-    print(seq_key_dataset.seqs[0].shape)
-    seq_dim = seq_key_dataset.seqs[0].shape[1]
-    print('First keyword indices')
-    print(seq_key_dataset.keywords[0])
-    keyword_vocab_size = len(seq_key_dataset.all_keywords)
-    print(keyword_vocab_size)
-
-    seq_kw_dataloader = DataLoader(seq_key_dataset, batch_size=batch_size, 
-            shuffle=True, collate_fn=seq_kw_collate_pad)
-    return seq_kw_dataloader, seq_dim, keyword_vocab_size
-
-# TODO: make data loader for length-transform code

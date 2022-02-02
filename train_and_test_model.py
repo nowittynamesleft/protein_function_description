@@ -27,8 +27,6 @@ def arguments():
     args.add_argument('--epochs', type=int, default=10)
     args.add_argument('--batch_size', type=int, default=1)
     args.add_argument('--seq_set_len', type=int, default=32)
-    args.add_argument('--min_tf_prob', type=float, default=1.0, 
-            help='Minimum teacher forcing prob (for scheduled sampling). Default is 1.0, so all teacher forcing.')
     args.add_argument('--emb_size', type=int, default=256)
     args.add_argument('--save_prefix', type=str, default='no_save_prefix')
     args.add_argument('--fasta_fname', type=str)
@@ -46,6 +44,8 @@ def arguments():
             help='Generate descriptions for the test dataset protein sets')
     args.add_argument('--load_vocab', type=str, default=None, 
             help='Load vocab from pickle file instead of assuming all description vocab is included in annot_seq_file')
+    args.add_argument('--validate', action='store_true', 
+            help='Validate and return loss for test_annot_seq_file')
 
     args = args.parse_args()
     print(args)
@@ -248,8 +248,8 @@ def classification(model, dataset, save_prefix='no_prefix', subsample=False):
     preds = []
     all_pred_token_probs = []
     # no len penalty
-    preds_2 = []
-    all_pred_token_probs_2 = []
+    #preds_2 = []
+    #all_pred_token_probs_2 = []
     # tqdm progress bar
     print(str(len(included_go_inds)) + "-way zero-shot classification.")
     if subsample:
@@ -263,32 +263,32 @@ def classification(model, dataset, save_prefix='no_prefix', subsample=False):
         #S_padded = S_padded.to(model.device)
         #S_mask = S_mask.to(model.device)
         seq_set_desc_probs, seq_set_desc_token_probs = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks, len_penalty=True) # batch sizes of 1 each, index out of it
-        seq_set_desc_probs_2, seq_set_desc_token_probs_2 = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks, len_penalty=False) # batch sizes of 1 each, index out of it
+        #seq_set_desc_probs_2, seq_set_desc_token_probs_2 = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks, len_penalty=False) # batch sizes of 1 each, index out of it
         preds.append(seq_set_desc_probs)
         all_pred_token_probs.append(seq_set_desc_token_probs)
         #preds.append(seq_set_desc_probs)
-        preds_2.append(seq_set_desc_probs_2)
-        all_pred_token_probs_2.append(seq_set_desc_token_probs_2)
+        #preds_2.append(seq_set_desc_probs_2)
+        #all_pred_token_probs_2.append(seq_set_desc_token_probs_2)
 
     #acc = accuracy_score(preds, included_go_inds)
     #import ipdb; ipdb.set_trace()
     #preds = torch.tensor(preds).transpose(0,1)
     preds = torch.tensor(preds)
     included_go_inds = torch.tensor(included_go_inds)
-    preds_2 = torch.tensor(preds_2)
+    #preds_2 = torch.tensor(preds_2)
     pred_outdict = {'seq_set_go_term_inds': included_go_inds, 'all_term_preds': preds, 'all_term_token_probs': seq_set_desc_token_probs, 'go_descriptions': np.array(dataset.go_descriptions)}
     pickle.dump(pred_outdict, open(save_prefix + '_pred_dict.pckl', 'wb'))
 
     if len(preds) < 1000:
         accs = accuracy(preds, included_go_inds, topk=(5, 4, 3, 2, 1))
         print('Len penalty: Top 5, 4, 3, 2, 1 accuracies: ' + str(accs))
-        accs_2 = accuracy(preds_2, included_go_inds, topk=(5, 4, 3, 2, 1))
-        print('No len penalty: Top 5, 4, 3, 2, 1 accuracies: ' + str(accs_2))
+        #accs_2 = accuracy(preds_2, included_go_inds, topk=(5, 4, 3, 2, 1))
+        #print('No len penalty: Top 5, 4, 3, 2, 1 accuracies: ' + str(accs_2))
     else:
         accs = accuracy(preds, included_go_inds, topk=(1000, 500, 100, 50, 10, 5, 1))
         print('Len penalty Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs))
-        accs_2 = accuracy(preds_2, included_go_inds, topk=(1000, 500, 100, 50, 10, 5, 1))
-        print('No len penalty Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs_2))
+        #accs_2 = accuracy(preds_2, included_go_inds, topk=(1000, 500, 100, 50, 10, 5, 1))
+        #print('No len penalty Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs_2))
 
     #aupr = micro_aupr(preds, dataset.go_annot_mat)
 
@@ -313,7 +313,7 @@ def get_train_val_dataloaders(full_dataset, batch_size, collate_fn, test=False):
 
 if __name__ == '__main__':
     args = arguments()
-    np.random.seed(973)
+    #np.random.seed(973)
     seq_set_len = args.seq_set_len
     emb_size = args.emb_size
     if args.load_vocab is not None:
@@ -340,8 +340,7 @@ if __name__ == '__main__':
     collate_fn = x.collate_fn
     model = SeqSet2SeqTransformer(num_encoder_layers=1, num_decoder_layers=1, 
             emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-            dim_feedforward=512, num_heads=4, dropout=0.0, vocab=x.vocab, 
-            min_tf_prob=args.min_tf_prob)
+            dim_feedforward=512, num_heads=4, dropout=0.0, vocab=x.vocab)
 
     if args.test_annot_seq_file is None:
         test_dataset = Subset(x, list(range(num_pred_terms)))
@@ -370,11 +369,13 @@ if __name__ == '__main__':
             model.to('cuda:0')
             print('Classfication before training:')
             preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, subsample=True)
-        train_dl, val_dl = get_train_val_dataloaders(x, args.batch_size, collate_fn, test=args.test)
+        #train_dl, val_dl = get_train_val_dataloaders(x, args.batch_size, collate_fn, test=args.test)
         print('Validation before training...')
-        trainer.validate(model, val_dl)
+        #trainer.validate(model, val_dl)
+        train_dl = DataLoader(x, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=0, pin_memory=True)
+        trainer.validate(model, train_dl)
         print('Training...')
-        trainer.fit(model, train_dl, val_dl)
+        trainer.fit(model, train_dl, train_dl)
         #dataloader = DataLoader(x, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
         #trainer.fit(model, dataloader)
         #logged_metrics = metric_callback.metrics
@@ -385,8 +386,6 @@ if __name__ == '__main__':
         ckpt = torch.load(args.load_model_predict)
         model.load_state_dict(ckpt['state_dict'])
 
-    print('Teacher forcing probability after training:')
-    print(model.tf_prob)
     #average_true_desc_prob = predict_all_prots_of_go_term(trainer, model, num_pred_terms, args.save_prefix, x, evaluate_probs=True)
     model.to('cuda:0')
     if args.classify:
@@ -397,6 +396,9 @@ if __name__ == '__main__':
         if model.pred_pair_probs:
             model.pred_pair_probs = False
         trainer.predict(model, test_dl)
+    if args.validate:
+        trainer.validate(model, test_dl)
+
 
     #print('Predict test:')
     #model.pred_pair_probs = True
