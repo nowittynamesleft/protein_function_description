@@ -55,6 +55,19 @@ class SequenceGOCSVDataset(Dataset):
 
     """
     def __init__(self, go_file, obo_file, num_samples, vocab=None, include_go=True, save_prefix='no_prefix'):
+        self.read_annot_info(go_file)
+        self.go_annot_mat = create_annot_mat(self.all_prot_ids, self.go_terms, self.go2prot_ids)
+        self.init_obo_info(obo_file)
+        self.tokenize_descriptions(self.go_desc_strings, vocab, save_prefix)
+        
+        self.alphabet = CHARS
+        self.num_samples = num_samples
+        self.collate_fn = partial(seq_go_collate_pad, seq_set_size=self.num_samples)
+        self.include_go = include_go
+        self.sample = True
+
+
+    def read_annot_info(self, go_file):
         annot_df = pd.read_csv(go_file, sep='\t')
         prot_seq_rows = annot_df.apply(lambda row: row['Prot-seqs'].split(','), axis=1)
         prot_seq_rows = [[seq2AAinds(prot) for prot in prot_seq_row] for prot_seq_row in prot_seq_rows]
@@ -64,8 +77,31 @@ class SequenceGOCSVDataset(Dataset):
         self.all_prot_ids = sorted(list(set([prot for prot_list in self.prot_lists for prot in prot_list])))
 
         self.go_terms = np.array(annot_df['GO-term'])
-        self.go_annot_mat = create_annot_mat(self.all_prot_ids, self.go_terms, self.go2prot_ids)
+        self.go_names = np.array(annot_df['GO-name'])
+        self.go_desc_strings = np.array(annot_df['GO-def'])
 
+
+    def tokenize_descriptions(self, desc_strings, vocab, save_prefix):
+        tokenizer = get_tokenizer('basic_english') 
+        tokenized = [tokenizer(desc) for desc in desc_strings]
+        # get vocab size -- what if it's just character by character?
+        if vocab is None:
+            self.vocab = sorted(list(set(itertools.chain.from_iterable(tokenized))))
+            self.vocab.insert(0, '<SOS>')
+            self.vocab.append('<EOS>')
+            pickle.dump(self.vocab, open(save_prefix + '_vocab.pckl', 'wb'))
+        else:
+            self.vocab = vocab
+        for token_list in tokenized:
+            token_list.insert(0, '<SOS>')
+            token_list.append('<EOS>')
+        word_to_id = {token: idx for idx, token in enumerate(self.vocab)}
+        token_ids = [[word_to_id[token] for token in tokens_doc if token in word_to_id] for tokens_doc in tokenized] # remove unknown tokens
+        self.go_descriptions = tokenized
+        self.go_token_ids = token_ids
+
+
+    def init_obo_info(self, obo_file):
         graph = obonet.read_obo(obo_file)
         id_to_depth_mf = dict(nx.single_target_shortest_path_length(graph, 'GO:0003674'))
         id_to_depth_bp = dict(nx.single_target_shortest_path_length(graph, 'GO:0008150'))
@@ -81,38 +117,6 @@ class SequenceGOCSVDataset(Dataset):
             else:
                 print(go_term + ' NOT FOUND IN OBO')
 
-
-        self.go_names = np.array(annot_df['GO-name'])
-        self.go_desc_strings = np.array(annot_df['GO-def'])
-        self.include_go = include_go
-        self.sample = True
-        #import ipdb; ipdb.set_trace()
-        print('Num go terms')
-        print(len(self.go_terms))
-        tokenizer = get_tokenizer('basic_english') 
-        tokenized = [tokenizer(desc) for desc in annot_df['GO-def']]
-        # get vocab size -- what if it's just character by character?
-        if vocab is None:
-            self.vocab = sorted(list(set(itertools.chain.from_iterable(tokenized))))
-            self.vocab.insert(0, '<SOS>')
-            self.vocab.append('<EOS>')
-            pickle.dump(self.vocab, open(save_prefix + '_vocab.pckl', 'wb'))
-        else:
-            self.vocab = vocab
-        for token_list in tokenized:
-            token_list.insert(0, '<SOS>')
-            token_list.append('<EOS>')
-        word_to_id = {token: idx for idx, token in enumerate(self.vocab)}
-        print('<SOS> and <EOS> token numbers:')
-        print(word_to_id['<SOS>'])
-        print(word_to_id['<EOS>'])
-        token_ids = [[word_to_id[token] for token in tokens_doc if token in word_to_id] for tokens_doc in tokenized] # remove unknown tokens
-        self.go_descriptions = tokenized
-        self.go_token_ids = token_ids
-        
-        self.alphabet = CHARS
-        self.num_samples = num_samples
-        self.collate_fn = partial(seq_go_collate_pad, seq_set_size=self.num_samples)
 
     def __getitem__(self, go_term_index):
         annotated_seqs = self.get_annotated_seqs(go_term_index)[0]
@@ -189,30 +193,33 @@ def seq_go_collate_pad(batch, seq_set_size=None):
 
 
     S_padded = torch.zeros((len(batch), seq_set_size, max_len))
-    #S_padded[:, :seq_set_size, :] = len(CHARS) # add "no residue" entries in one-hot matrix
 
     # Sequence padding
-    for i in range(len(batch)):
+    for seq_set_ind in range(len(batch)):
+        curr_S_padded = S_padded[seq_set_ind]
+        curr_seq_set_lengths = lengths[seq_set_ind]
         if GO_present:
             (seq_set, _) = batch[i]
         else:
             seq_set = batch[i][0]
-        for j in range(len(seq_set)):
-            seq = seq_set[j]
-            if max_len >= lengths[i, j]:
-                S_padded[i, j][:lengths[i, j]] = torch.from_numpy(seq.transpose())
-            else:
-                S_padded[i, j][:max_len] = torch.from_numpy(seq[:max_len, :].transpose())
+        pad_seq_set(curr_S_padded, seq_set, curr_seq_set_lengths, max_len)
         
-    # handle GO descriptions. Pad max length of the GO description?
+    # pad GO descriptions
     if GO_present:
-
         batch_go_descs = [torch.from_numpy(np.array(go_desc)) for (_, go_desc) in batch]
         GO_padded, GO_mask = pad_GO(batch_go_descs)
-
         return S_padded, S_mask, GO_padded, GO_mask
     else:
         return S_padded, S_mask
+
+
+def pad_seq_set(S_padded, seq_set, lengths, max_len):
+    for j in range(len(seq_set)):
+        seq = seq_set[j]
+        if max_len >= lengths[j]:
+            S_padded[j][:lengths[j]] = torch.from_numpy(seq.transpose())
+        else:
+            S_padded[j][:max_len] = torch.from_numpy(seq[:max_len, :].transpose())
 
 
 def pad_GO(go_descs):

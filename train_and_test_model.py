@@ -260,35 +260,21 @@ def classification(model, dataset, save_prefix='no_prefix', subsample=False):
         else:
             seq_set = dataset.get_annotated_seqs(ind)
         S_padded, S_mask = seq_go_collate_pad([seq_set], seq_set_size=len(seq_set[0]))
-        #S_padded = S_padded.to(model.device)
-        #S_mask = S_mask.to(model.device)
         seq_set_desc_probs, seq_set_desc_token_probs = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks, len_penalty=True) # batch sizes of 1 each, index out of it
-        #seq_set_desc_probs_2, seq_set_desc_token_probs_2 = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks, len_penalty=False) # batch sizes of 1 each, index out of it
         preds.append(seq_set_desc_probs)
         all_pred_token_probs.append(seq_set_desc_token_probs)
-        #preds.append(seq_set_desc_probs)
-        #preds_2.append(seq_set_desc_probs_2)
-        #all_pred_token_probs_2.append(seq_set_desc_token_probs_2)
 
-    #acc = accuracy_score(preds, included_go_inds)
-    #import ipdb; ipdb.set_trace()
-    #preds = torch.tensor(preds).transpose(0,1)
     preds = torch.tensor(preds)
     included_go_inds = torch.tensor(included_go_inds)
-    #preds_2 = torch.tensor(preds_2)
     pred_outdict = {'seq_set_go_term_inds': included_go_inds, 'all_term_preds': preds, 'all_term_token_probs': seq_set_desc_token_probs, 'go_descriptions': np.array(dataset.go_descriptions)}
     pickle.dump(pred_outdict, open(save_prefix + '_pred_dict.pckl', 'wb'))
 
     if len(preds) < 1000:
         accs = accuracy(preds, included_go_inds, topk=(5, 4, 3, 2, 1))
         print('Len penalty: Top 5, 4, 3, 2, 1 accuracies: ' + str(accs))
-        #accs_2 = accuracy(preds_2, included_go_inds, topk=(5, 4, 3, 2, 1))
-        #print('No len penalty: Top 5, 4, 3, 2, 1 accuracies: ' + str(accs_2))
     else:
         accs = accuracy(preds, included_go_inds, topk=(1000, 500, 100, 50, 10, 5, 1))
         print('Len penalty Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs))
-        #accs_2 = accuracy(preds_2, included_go_inds, topk=(1000, 500, 100, 50, 10, 5, 1))
-        #print('No len penalty Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs_2))
 
     #aupr = micro_aupr(preds, dataset.go_annot_mat)
 
