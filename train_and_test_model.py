@@ -2,7 +2,7 @@ from data import SequenceGOCSVDataset, seq_go_collate_pad, SequenceDataset
 from torch.utils.data import DataLoader, Subset
 import torch
 #from models import NMTDescriptionGen
-from alt_transformer_model import SeqSet2SeqTransformer, create_mask
+from alt_transformer_model import SeqSet2SeqTransformer
 from pytorch_lightning import Trainer, Callback
 from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.plugins import DDPPlugin # for find_unused_parameters=False; this is True by default which gives a performance hit, and according to documentation
@@ -362,6 +362,8 @@ if __name__ == '__main__':
         trainer.validate(model, train_dl)
         print('Training...')
         trainer.fit(model, train_dl, train_dl)
+        print('Length convert sigma after training:')
+        print(model.len_convert.sigma)
         #dataloader = DataLoader(x, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
         #trainer.fit(model, dataloader)
         #logged_metrics = metric_callback.metrics
@@ -373,6 +375,8 @@ if __name__ == '__main__':
         model.load_state_dict(ckpt['state_dict'])
 
     #average_true_desc_prob = predict_all_prots_of_go_term(trainer, model, num_pred_terms, args.save_prefix, x, evaluate_probs=True)
+    print('Length convert sigma:')
+    print(model.len_convert.sigma)
     model.to('cuda:0')
     if args.classify:
         print('Classfication after whole script:')
