@@ -75,6 +75,8 @@ class LengthConverter(pl.LightningModule):
         # assuming else statement..
         distance = in_pos_inds - len_adjusted_out_pos_inds[:, :, None]
         logits = (- torch.pow(distance, 2) / (2. * self.sigma ** 2))
+        #distance = torch.clamp(in_pos_inds - len_adjusted_out_pos_inds[:, :, None], -100, 100)
+        #logits = (- torch.pow(2, distance) / (2. * self.sigma ** 2)) # reverse because that's what the old model had I guess
 
         logits = logits * z_mask[:, None, :].float() - 999. * (1 - z_mask[:, None, :].float()) # remove attention weight from masked indices
         weight = torch.softmax(logits, 2)
@@ -149,9 +151,10 @@ class SeqSet2SeqTransformer(pl.LightningModule):
 
 
     def encode_seq_set(self, src, src_padding_mask):
-        transformed_embeds = torch.cat([self.encode(src[j, :].unsqueeze(0), src_padding_mask[j, :].unsqueeze(0)) for j in range(src.shape[0])])
+        # want to change to batches
+        transformed_embeds = self.encode(src, src_padding_mask)
         # len convert expects src_padding_mask to be all positions that HAVE tokens, so it is inverted here:
-        len_trans_embeds, _ = self.len_convert(transformed_embeds, self._max_lens(src_padding_mask), ~src_padding_mask.bool()) # len convert seems to have strange behavior (all features at a given position are the same after it)
+        len_trans_embeds, _ = self.len_convert(transformed_embeds, self._max_lens(src_padding_mask), ~src_padding_mask.bool()) 
         avg_src_transformed_embed = torch.mean(len_trans_embeds, dim=0).unsqueeze(0)
         return avg_src_transformed_embed
 
@@ -171,15 +174,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         #print(outputs.shape)
         
         _, preds = outputs.max(axis=1)
-        #print(self.convert_batch_preds_to_words(preds))
-        #print(GO_padded_output.shape)
-        #import ipdb; ipdb.set_trace()
-
-        #loss = self.loss_fn(outputs.contiguous().view(-1, len(self.vocab)), GO_padded_output.contiguous().view(-1))
-        #loss = self.loss_fn(outputs.reshape(-1, len(self.vocab)).contiguous(), GO_padded_output.view(-1).contiguous())
         loss = self.loss_fn(outputs, GO_padded_output) # loss function should ignore padding index (0)
-        #self.log_dict({'loss': loss, 'sample_output': outputs[0]})
-        #self.log_dict({'loss': loss})
         if batch_idx == 0:
             print('First batch outputs:')
             print(self.convert_batch_preds_to_words(preds))
@@ -188,27 +183,22 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             print('Loss for this batch: ' + str(loss))
         self.log("loss", loss, on_epoch=True, on_step=False, prog_bar=True)
         self.log("sigma", self.len_convert.sigma, on_epoch=True, on_step=False, prog_bar=True)
-
          
         return {'loss': loss}
     
     def validation_step(self, valid_batch, batch_idx):
-        # get greedy decoding of the first couple samples
         S_padded, S_pad_mask, GO_padded_all, GO_pad_mask = valid_batch 
         GO_padded_input = GO_padded_all[:, :-1]
         GO_padded_output = GO_padded_all[:, 1:]
         GO_pad_mask_input = GO_pad_mask[:, :-1]
         GO_pad_mask_output = GO_pad_mask[:, 1:]
         tgt_mask = create_target_masks(GO_padded_input, device=self.device)
-        #import ipdb; ipdb.set_trace()
 
         outputs = self(src=S_padded, trg=GO_padded_input, tgt_mask=tgt_mask, src_padding_mask=S_pad_mask,
             tgt_padding_mask=GO_pad_mask_input, memory_key_padding_mask=None)
 
         loss = self.loss_fn(outputs, GO_padded_output)
-        #loss = self.loss_fn(outputs.reshape(-1, len(self.vocab)).contiguous(), GO_padded_output.view(-1).contiguous())
         loss_dict = {'val_loss': loss}
-        #self.log_dict(loss_dict)
         self.log('val_loss', loss, on_epoch=True, on_step=False, prog_bar=True)
          
         return loss_dict
@@ -224,37 +214,9 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         return False
 
 
-    def get_seq_set_desc_pair_logits(self, pred_batch):
-        # get correct sequence set GO description pair logits
-        assert 'cuda' in str(self.device)
-        #import ipdb; ipdb.set_trace()
-        start_symbol = 0
-        end_symbol = self.tgt_vocab_size
-        S_padded, S_pad_mask, actual_GO_padded_all, GO_pad_mask = pred_batch
-        tgt_mask = create_target_masks(actual_GO_padded[:, :-1], device=self.device) # create description mask only for input
-        num_sets = S_padded.shape[0]
-
-        desc_logits = []
-        all_desc_token_logits = []
-        for seq_set_ind in range(num_sets):
-            #print(str(seq_set_ind) + ' out of ' + str(num_sets) + ' sequence sets.')
-            curr_actual_GO_padded = actual_GO_padded[seq_set_ind]
-            curr_tgt_mask = tgt_mask[seq_set_ind]
-            curr_GO_pad_mask = GO_pad_mask[seq_set_ind]
-
-            embedding = self.encode_seq_set(S_padded[seq_set_ind, ...], S_pad_mask[seq_set_ind, ...])
-            desc_logit, correct_token_logits = self.get_single_seq_set_desc_pair_logits(embedding, curr_actual_GO_padded, curr_tgt_mask, curr_GO_pad_mask)
-            desc_logits.append(desc_logit)
-            all_desc_token_logits.append(correct_token_logits)
-
-        desc_logits = torch.Tensor(desc_logits)
-        all_desc_token_logits = torch.Tensor(all_desc_token_logits)
-
-        return desc_logits, all_desc_token_logits 
-
-
     def get_single_seq_set_desc_pair_logits(self, avg_src_transformed_embed, actual_GO_padded, tgt_mask, GO_pad_mask, len_penalty=True):
         # given sequence set embedding and GO description, calculate probability model assigns to the sequence with length penalty
+        assert 'cuda' in str(self.device)
         start_symbol = 0
         end_symbol = self.tgt_vocab_size - 1
         desc_logit = 0
@@ -262,8 +224,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         actual_GO_padded_input = actual_GO_padded[:, :-1]
         actual_GO_padded_output = actual_GO_padded[:, 1:]
         GO_pad_mask_output = GO_pad_mask[:,1:]
-
-
+        '''
         logits = self.decode(actual_GO_padded_input, avg_src_transformed_embed, tgt_mask)
         considered_logits = logits[~GO_pad_mask_output]
         correct_tokens = actual_GO_padded_output[~GO_pad_mask_output]
@@ -278,6 +239,25 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         # otherwise no length penalty
 
         return desc_logit.item(), correct_token_logits
+        '''
+
+        logits = self.decode(actual_GO_padded_input, avg_src_transformed_embed, tgt_mask)
+        considered_logits = logits[~GO_pad_mask_output]
+        considered_probs = torch.softmax(considered_logits, -1)
+        considered_log_probs = torch.log(considered_probs)
+
+        correct_tokens = actual_GO_padded_output[~GO_pad_mask_output]
+        correct_token_log_probs = torch.stack([considered_log_probs[position, correct_tokens[position]] for position in range(correct_tokens.shape[0])])
+        desc_log_prob = torch.sum(correct_token_log_probs, dim=-1)
+        correct_token_log_probs = correct_token_log_probs.detach().cpu().numpy()
+         
+        if type(len_penalty) == bool and len_penalty:
+            desc_log_prob /= len(correct_tokens) # length penalty, no parameter for now
+        elif type(len_penalty) == float:
+            desc_log_prob /= len(correct_tokens)**len_penalty # length penalty parameter
+        # otherwise no length penalty
+
+        return desc_log_prob.item(), correct_token_log_probs
 
 
     def classify_seq_set(self, S_padded, S_pad_mask, all_GO_padded, GO_pad_mask, len_penalty=True):

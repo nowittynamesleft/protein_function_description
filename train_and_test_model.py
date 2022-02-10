@@ -22,8 +22,8 @@ obofile = 'go.obo'
 def arguments():
     args = argparse.ArgumentParser()
     #args.add_argument('--learning_rate', type=float, default=0.01)
-    args.add_argument('annot_seq_file', type=str)
-    args.add_argument('--test_annot_seq_file', type=str, default=None)
+    args.add_argument('annot_seq_file', type=str, help='Training annotation dataset')
+    args.add_argument('test_annot_seq_file', type=str, help='Test annotation dataset for validation and prediction')
     args.add_argument('--epochs', type=int, default=10)
     args.add_argument('--batch_size', type=int, default=1)
     args.add_argument('--seq_set_len', type=int, default=32)
@@ -81,14 +81,6 @@ def convert_sample_preds_to_words(predictions, vocab):
     for batch in predictions:
         for sample in batch:
             word_preds.append([vocab[ind] for ind in sample])
-    return word_preds
-
-
-def convert_single_batch_preds_to_words(predictions, vocab):
-    # converts all predictions in a set of batches to words in a num_batches*batch_size-length list of sentence-length lists of strings
-    word_preds = []
-    for sample in predictions:
-        word_preds.append([vocab[ind] for ind in sample])
     return word_preds
 
 
@@ -237,46 +229,45 @@ def single_prot_description(model, annot_seq_file, loaded_vocab, save_prefix, nu
     outfile.close()
 
 
-def classification(model, dataset, save_prefix='no_prefix', subsample=False):
+def classification(model, dataset, save_prefix='no_prefix', subsample=False, num_subsamples=10):
     # extract each seq set, compute all pairs of probabilities
+    #import ipdb; ipdb.set_trace()
     GO_padded, GO_pad_masks = dataset.get_padded_descs()
     dataset.set_include_go_mode(False)
     if subsample:
         included_go_inds = np.arange(len(dataset))
     else:
-        dataloaders, _, included_go_inds = get_individual_go_term_dataloaders(dataset, len(dataset), max_seq_set_size=128) # do somewhat specific ones just to take less time...
+        dataloaders, _, included_go_inds = get_individual_go_term_dataloaders(dataset, len(dataset), max_seq_set_size=128) # 128 sequences can fit in GPU memory
     preds = []
     all_pred_token_probs = []
-    # no len penalty
-    #preds_2 = []
-    #all_pred_token_probs_2 = []
-    # tqdm progress bar
     print(str(len(included_go_inds)) + "-way zero-shot classification.")
     if subsample:
         print("Subsampling the sequence sets to make predictions")
-    for ind in tqdm.tqdm(included_go_inds): # only take the indices of terms that have few enough sequences annotated (to fit in gpu memory)
-        if subsample:
+    ground_truth = []
+    print("Num subsamples per term:" + str(num_subsamples))
+    for ind in tqdm.tqdm(included_go_inds):
+        #if subsample:
+        for it in range(num_subsamples):
             seq_set = dataset[ind]
-        else:
-            seq_set = dataset.get_annotated_seqs(ind)
-        S_padded, S_mask = seq_go_collate_pad([seq_set], seq_set_size=len(seq_set[0]))
-        seq_set_desc_probs, seq_set_desc_token_probs = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks, len_penalty=True) # batch sizes of 1 each, index out of it
-        preds.append(seq_set_desc_probs)
-        all_pred_token_probs.append(seq_set_desc_token_probs)
+            ground_truth.append(ind)
+            #else:
+                #seq_set = dataset.get_annotated_seqs(ind)
+            S_padded, S_mask = seq_go_collate_pad([seq_set], seq_set_size=len(seq_set[0])) # batch sizes of 1 each, index out of it
+            seq_set_desc_probs, seq_set_desc_token_probs = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks, len_penalty=True) 
+            preds.append(seq_set_desc_probs)
+            all_pred_token_probs.append(seq_set_desc_token_probs)
 
     preds = torch.tensor(preds)
-    included_go_inds = torch.tensor(included_go_inds)
-    pred_outdict = {'seq_set_go_term_inds': included_go_inds, 'all_term_preds': preds, 'all_term_token_probs': seq_set_desc_token_probs, 'go_descriptions': np.array(dataset.go_descriptions)}
+    ground_truth = torch.tensor(ground_truth)
+    pred_outdict = {'seq_set_go_term_inds': ground_truth, 'all_term_preds': preds, 'all_term_token_probs': seq_set_desc_token_probs, 'go_descriptions': np.array(dataset.go_descriptions)}
     pickle.dump(pred_outdict, open(save_prefix + '_pred_dict.pckl', 'wb'))
 
-    if len(preds) < 1000:
-        accs = accuracy(preds, included_go_inds, topk=(5, 4, 3, 2, 1))
+    if preds.shape[1] < 1000:
+        accs = accuracy(preds, ground_truth, topk=(5, 4, 3, 2, 1))
         print('Len penalty: Top 5, 4, 3, 2, 1 accuracies: ' + str(accs))
     else:
-        accs = accuracy(preds, included_go_inds, topk=(1000, 500, 100, 50, 10, 5, 1))
-        print('Len penalty Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs))
-
-    #aupr = micro_aupr(preds, dataset.go_annot_mat)
+        accs = accuracy(preds, ground_truth, topk=(1000, 500, 100, 50, 10, 5, 1))
+        print('Len penalty: Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs))
 
     return preds, accs
     
@@ -299,7 +290,6 @@ def get_train_val_dataloaders(full_dataset, batch_size, collate_fn, test=False):
 
 if __name__ == '__main__':
     args = arguments()
-    #np.random.seed(973)
     seq_set_len = args.seq_set_len
     emb_size = args.emb_size
     if args.load_vocab is not None:
@@ -310,40 +300,25 @@ if __name__ == '__main__':
         x = SequenceGOCSVDataset(args.annot_seq_file, obofile, seq_set_len, save_prefix=args.save_prefix)
         pickle.dump(x.vocab, open(vocab_fname, 'wb'))
 
-    #num_gpus = torch.cuda.device_count()
     num_gpus = 1
     dl_workers = 0
-    #dl_workers = num_gpus # one per gpu I guess?
-#num_gpus = 1
-#dl_workers = 0
     num_pred_terms = args.num_pred_terms
     if args.num_pred_terms == -1:
         num_pred_terms = len(x)
 
 
-    print('Vocab size:')
-    print(len(x.vocab))
+    print('Vocab size:' + str(len(x.vocab)))
     collate_fn = x.collate_fn
     model = SeqSet2SeqTransformer(num_encoder_layers=1, num_decoder_layers=1, 
             emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
             dim_feedforward=512, num_heads=4, dropout=0.0, vocab=x.vocab)
 
-    if args.test_annot_seq_file is None:
-        test_dataset = Subset(x, list(range(num_pred_terms)))
-        test_dl = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
-    else:
-        test_dataset = SequenceGOCSVDataset(args.test_annot_seq_file, obofile, seq_set_len, vocab=x.vocab)
-        test_dl = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
+    test_dataset = SequenceGOCSVDataset(args.test_annot_seq_file, obofile, seq_set_len, vocab=x.vocab)
+    test_dl = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
 
     #metric_callback = MetricsCallback()
     early_stopping_callback = EarlyStopping(monitor="val_loss", min_delta=0.00, patience=10)
     csv_logger = CSVLogger('lightning_logs', name=(args.save_prefix + '_experiment'))
-    #trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs, auto_select_gpus=True,  # mixed precision causes nan loss, so back to regular precision.
-            #callbacks=metric_callback, strategy=DDPPlugin(find_unused_parameters=False), checkpoint_callback=(not args.test), logger=(not args.test))
-    #trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs,  # mixed precision causes nan loss, so back to regular precision.
-    #        callbacks=[metric_callback, early_stopping_callback], logger=csv_logger)
-    #trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs,  # mixed precision causes nan loss, so back to regular precision.
-    #        callbacks=[metric_callback], logger=csv_logger)
     trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs,  # mixed precision causes nan loss, so back to regular precision.
             callbacks=[early_stopping_callback], logger=csv_logger)
 
@@ -355,43 +330,29 @@ if __name__ == '__main__':
             model.to('cuda:0')
             print('Classfication before training:')
             preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, subsample=True)
-        #train_dl, val_dl = get_train_val_dataloaders(x, args.batch_size, collate_fn, test=args.test)
-        print('Validation before training...')
-        #trainer.validate(model, val_dl)
         train_dl = DataLoader(x, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=0, pin_memory=True)
-        trainer.validate(model, train_dl)
+        print('Validation loss:')
+        trainer.validate(model, test_dl)
         print('Training...')
-        trainer.fit(model, train_dl, train_dl)
-        print('Length convert sigma after training:')
-        print(model.len_convert.sigma)
-        #dataloader = DataLoader(x, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
-        #trainer.fit(model, dataloader)
-        #logged_metrics = metric_callback.metrics
-        #print('Logged_metrics')
-        #print(logged_metrics)
+        trainer.fit(model, train_dl, test_dl)
+        print('Length convert sigma after training:' + str(model.len_convert.sigma))
     else:
         print('Loading model for predicting only: ' + args.load_model_predict)
         ckpt = torch.load(args.load_model_predict)
         model.load_state_dict(ckpt['state_dict'])
 
     #average_true_desc_prob = predict_all_prots_of_go_term(trainer, model, num_pred_terms, args.save_prefix, x, evaluate_probs=True)
-    print('Length convert sigma:')
-    print(model.len_convert.sigma)
+    print('Length convert sigma:' + str(model.len_convert.sigma))
     model.to('cuda:0')
+    if args.validate:
+        trainer.validate(model, test_dl)
     if args.classify:
         print('Classfication after whole script:')
+        model.to('cuda:0')
         preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, subsample=True)
     if args.generate:
         print('Generation after whole script:')
         if model.pred_pair_probs:
             model.pred_pair_probs = False
         trainer.predict(model, test_dl)
-    if args.validate:
-        trainer.validate(model, test_dl)
 
-
-    #print('Predict test:')
-    #model.pred_pair_probs = True
-    #trainer.predict(model, test_dl)
-    #predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset, args.save_prefix)
-    
