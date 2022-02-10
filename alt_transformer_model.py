@@ -24,13 +24,13 @@ class PositionalEncoding(nn.Module):
         pos_embedding = torch.zeros((maxlen, emb_size))
         pos_embedding[:, 0::2] = torch.sin(pos * den)
         pos_embedding[:, 1::2] = torch.cos(pos * den)
-        pos_embedding = pos_embedding.unsqueeze(0)
+        # batch size, 
+        pos_embedding = pos_embedding[None, ...]
 
         self.dropout = nn.Dropout(dropout)
         self.register_buffer('pos_embedding', pos_embedding)
 
     def forward(self, token_embedding: Tensor):
-        #import ipdb; ipdb.set_trace()
         return self.dropout(token_embedding +
                 self.pos_embedding[:, :token_embedding.size(1),:])
 
@@ -136,26 +136,24 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                 tgt_padding_mask: Tensor, memory_key_padding_mask: Tensor):
         
         src_transformed_list = []
-        outputs = []
-        
-        for i in range(src.shape[0]): # seq set in batch
-
-            # Do I even need a padding mask for the GO descriptions? I'm removing those from the loss anyway
-            avg_src_transformed_embed = self.encode_seq_set(src[i, ...], src_padding_mask[i, ...])
-            logits = self.decode(trg[i, :].unsqueeze(0), avg_src_transformed_embed, tgt_mask[i,:])
-            outputs.append(logits)
-            
-        outputs = torch.cat(outputs)
-        outputs = outputs.transpose(1,2)
-        return outputs
+        avg_src_transformed_embed = self.encode_seq_set(src, src_padding_mask)
+        logits = self.decode(trg, avg_src_transformed_embed, tgt_mask)
+        logits = logits.transpose(1,2)
+        return logits
 
 
     def encode_seq_set(self, src, src_padding_mask):
         # want to change to batches
+        # Batch size X seq_set_len X max_len (of batch)
+        #import ipdb; ipdb.set_trace()
+        batch_size, seq_set_len, max_len = src.shape
         transformed_embeds = self.encode(src, src_padding_mask)
         # len convert expects src_padding_mask to be all positions that HAVE tokens, so it is inverted here:
+        transformed_embeds = transformed_embeds.reshape(batch_size*seq_set_len, max_len, -1)
+        src_padding_mask = src_padding_mask.reshape(batch_size*seq_set_len, max_len)
         len_trans_embeds, _ = self.len_convert(transformed_embeds, self._max_lens(src_padding_mask), ~src_padding_mask.bool()) 
-        avg_src_transformed_embed = torch.mean(len_trans_embeds, dim=0).unsqueeze(0)
+        len_trans_embeds = len_trans_embeds.reshape(batch_size, seq_set_len, max_len, -1)
+        avg_src_transformed_embed = torch.mean(len_trans_embeds, dim=1)
         return avg_src_transformed_embed
 
 
@@ -214,64 +212,49 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         return False
 
 
-    def get_single_seq_set_desc_pair_logits(self, avg_src_transformed_embed, actual_GO_padded, tgt_mask, GO_pad_mask, len_penalty=True):
+    def get_single_seq_set_desc_pair_logits(self, avg_src_transformed_embeds, actual_GO_padded, tgt_mask, GO_pad_mask, len_penalty=True):
         # given sequence set embedding and GO description, calculate probability model assigns to the sequence with length penalty
+        # making this batchwise based on sequence sets, for a given GO term
         assert 'cuda' in str(self.device)
-        start_symbol = 0
-        end_symbol = self.tgt_vocab_size - 1
-        desc_logit = 0
+        with torch.no_grad():
+            start_symbol = 0
+            end_symbol = self.tgt_vocab_size - 1
+            desc_logit = 0
+            num_seq_sets = avg_src_transformed_embeds.shape[0]
 
-        actual_GO_padded_input = actual_GO_padded[:, :-1]
-        actual_GO_padded_output = actual_GO_padded[:, 1:]
-        GO_pad_mask_output = GO_pad_mask[:,1:]
-        '''
-        logits = self.decode(actual_GO_padded_input, avg_src_transformed_embed, tgt_mask)
-        considered_logits = logits[~GO_pad_mask_output]
-        correct_tokens = actual_GO_padded_output[~GO_pad_mask_output]
-        correct_token_logits = torch.stack([considered_logits[position, correct_tokens[position]] for position in range(correct_tokens.shape[0])])
-        desc_logit = torch.sum(correct_token_logits, dim=-1)
-        correct_token_logits = correct_token_logits.detach().cpu().numpy()
-         
-        if type(len_penalty) == bool and len_penalty:
-            desc_logit /= len(correct_tokens) # length penalty, no parameter for now
-        elif type(len_penalty) == float:
-            desc_logit /= len(correct_tokens)**len_penalty # length penalty parameter
-        # otherwise no length penalty
+            actual_GO_padded_input = actual_GO_padded[:, :-1].repeat(num_seq_sets, 1)
+            actual_GO_padded_output = actual_GO_padded[0, 1:] # only one GO description
+            GO_pad_mask_output = GO_pad_mask[0,1:] # only one mask, function is computing probabilities for multiple seq_sets for one GO description
+            
+            logits = self.decode(actual_GO_padded_input, avg_src_transformed_embeds, tgt_mask)
+            considered_logits = logits[:, ~GO_pad_mask_output, :]
+            considered_probs = torch.softmax(considered_logits, -1)
+            considered_log_probs = torch.log(considered_probs)
 
-        return desc_logit.item(), correct_token_logits
-        '''
+            correct_tokens = actual_GO_padded_output[~GO_pad_mask_output]
+            correct_token_log_probs = torch.stack([considered_log_probs[:, position, correct_tokens[position]] for position in range(correct_tokens.shape[0])])
+            correct_token_log_probs = correct_token_log_probs.transpose(0,1)
+            desc_log_prob = torch.sum(correct_token_log_probs, dim=-1)
+            correct_token_log_probs = correct_token_log_probs.detach().cpu().numpy()
+             
+            if len_penalty:
+                desc_log_prob = desc_log_prob/len(correct_tokens) # length penalty, no parameter for now
 
-        logits = self.decode(actual_GO_padded_input, avg_src_transformed_embed, tgt_mask)
-        considered_logits = logits[~GO_pad_mask_output]
-        considered_probs = torch.softmax(considered_logits, -1)
-        considered_log_probs = torch.log(considered_probs)
-
-        correct_tokens = actual_GO_padded_output[~GO_pad_mask_output]
-        correct_token_log_probs = torch.stack([considered_log_probs[position, correct_tokens[position]] for position in range(correct_tokens.shape[0])])
-        desc_log_prob = torch.sum(correct_token_log_probs, dim=-1)
-        correct_token_log_probs = correct_token_log_probs.detach().cpu().numpy()
-         
-        if type(len_penalty) == bool and len_penalty:
-            desc_log_prob /= len(correct_tokens) # length penalty, no parameter for now
-        elif type(len_penalty) == float:
-            desc_log_prob /= len(correct_tokens)**len_penalty # length penalty parameter
-        # otherwise no length penalty
-
-        return desc_log_prob.item(), correct_token_log_probs
+        return torch.tensor(desc_log_prob.detach().cpu()), correct_token_log_probs
 
 
-    def classify_seq_set(self, S_padded, S_pad_mask, all_GO_padded, GO_pad_mask, len_penalty=True):
-        desc_logits = []
+    def classify_seq_sets(self, S_padded, S_pad_mask, all_GO_padded, GO_pad_mask, len_penalty=True):
+        go_desc_logits = []
         all_desc_token_logits = []
         tgt_mask = create_target_masks(all_GO_padded[:, :-1], device=self.device) # create mask only for input
-        embedding = self.encode_seq_set(S_padded[0].to(self.device), S_pad_mask[0].to(self.device))
+        embedding = self.encode_seq_set(S_padded.to(self.device), S_pad_mask.to(self.device))
         for go_ind in range(all_GO_padded.shape[0]):
             curr_GO_padded = all_GO_padded[go_ind].to(self.device)
-            desc_logit, desc_token_logits = self.get_single_seq_set_desc_pair_logits(embedding, curr_GO_padded.unsqueeze(0), tgt_mask[go_ind].to(self.device), GO_pad_mask[go_ind].unsqueeze(0).to(self.device), len_penalty=len_penalty)
-            desc_logits.append(desc_logit)
+            desc_logits, desc_token_logits = self.get_single_seq_set_desc_pair_logits(embedding, curr_GO_padded.unsqueeze(0), tgt_mask.to(self.device), GO_pad_mask[go_ind].unsqueeze(0).to(self.device), len_penalty=len_penalty)
+            go_desc_logits.append(desc_logits)
             all_desc_token_logits.append(desc_token_logits)
 
-        return desc_logits, all_desc_token_logits
+        return torch.stack(go_desc_logits).transpose(0,1), all_desc_token_logits
 
 
     def beam_search(self, pred_batch):
@@ -404,8 +387,13 @@ class SeqSet2SeqTransformer(pl.LightningModule):
 
     def encode(self, src: Tensor, src_padding_mask: Tensor):
         #import ipdb; ipdb.set_trace()
-        return self.transformer_encoder(self.positional_encoding(
+        batch_size, seq_set_len, max_len = src.shape
+        src = src.reshape(-1, max_len) # make it one big batch
+        src_padding_mask = src_padding_mask.reshape(-1, max_len) # make it one big batch
+        encoded = self.transformer_encoder(self.positional_encoding(
                             self.src_tok_emb(src)), None, src_padding_mask)
+        encoded = encoded.reshape(batch_size, seq_set_len, max_len, -1) # last dim should be emb_size
+        return encoded
 
     def decode(self, tgt: Tensor, memory: Tensor, tgt_mask: Tensor):
         #import ipdb; ipdb.set_trace()
@@ -426,6 +414,8 @@ def generate_square_subsequent_mask(sz, device=None):
 
 def create_target_masks(tgt, device=None):
     tgt_batch_size, tgt_seq_len = tgt.shape
-    tgt_mask = torch.stack([generate_square_subsequent_mask(tgt_seq_len, device=device) for i in range(tgt_batch_size)])
+    #tgt_mask = torch.stack([generate_square_subsequent_mask(tgt_seq_len, device=device) for i in range(tgt_batch_size)])
+    # tgt_mask should be the same for the whole batch since they're all the same shape if they're padded
+    tgt_mask = generate_square_subsequent_mask(tgt_seq_len, device=device)
 
     return tgt_mask

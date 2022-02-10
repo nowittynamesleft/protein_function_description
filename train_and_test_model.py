@@ -229,35 +229,27 @@ def single_prot_description(model, annot_seq_file, loaded_vocab, save_prefix, nu
     outfile.close()
 
 
-def classification(model, dataset, save_prefix='no_prefix', subsample=False, num_subsamples=10):
+def classification(model, dataset, save_prefix='no_prefix', num_subsamples=10):
     # extract each seq set, compute all pairs of probabilities
     #import ipdb; ipdb.set_trace()
     GO_padded, GO_pad_masks = dataset.get_padded_descs()
     dataset.set_include_go_mode(False)
-    if subsample:
-        included_go_inds = np.arange(len(dataset))
-    else:
-        dataloaders, _, included_go_inds = get_individual_go_term_dataloaders(dataset, len(dataset), max_seq_set_size=128) # 128 sequences can fit in GPU memory
+    included_go_inds = np.arange(len(dataset))
     preds = []
     all_pred_token_probs = []
     print(str(len(included_go_inds)) + "-way zero-shot classification.")
-    if subsample:
-        print("Subsampling the sequence sets to make predictions")
     ground_truth = []
     print("Num subsamples per term:" + str(num_subsamples))
     for ind in tqdm.tqdm(included_go_inds):
-        #if subsample:
-        for it in range(num_subsamples):
-            seq_set = dataset[ind]
-            ground_truth.append(ind)
-            #else:
-                #seq_set = dataset.get_annotated_seqs(ind)
-            S_padded, S_mask = seq_go_collate_pad([seq_set], seq_set_size=len(seq_set[0])) # batch sizes of 1 each, index out of it
-            seq_set_desc_probs, seq_set_desc_token_probs = model.classify_seq_set(S_padded, S_mask, GO_padded, GO_pad_masks, len_penalty=True) 
-            preds.append(seq_set_desc_probs)
-            all_pred_token_probs.append(seq_set_desc_token_probs)
+        seq_sets = [dataset[ind] for it in range(num_subsamples)]
+        ground_truth.extend([ind]*num_subsamples)
+        S_padded, S_mask = seq_go_collate_pad(seq_sets, seq_set_size=len(seq_sets[0][0])) # batch sizes of 1 each, index out of it
+        seq_set_desc_probs, seq_set_desc_token_probs = model.classify_seq_sets(S_padded, S_mask, GO_padded, GO_pad_masks, len_penalty=True) 
+        preds.append(seq_set_desc_probs)
+        all_pred_token_probs.append(seq_set_desc_token_probs)
 
-    preds = torch.tensor(preds)
+    #import ipdb; ipdb.set_trace()
+    preds = torch.cat(preds)
     ground_truth = torch.tensor(ground_truth)
     pred_outdict = {'seq_set_go_term_inds': ground_truth, 'all_term_preds': preds, 'all_term_token_probs': seq_set_desc_token_probs, 'go_descriptions': np.array(dataset.go_descriptions)}
     pickle.dump(pred_outdict, open(save_prefix + '_pred_dict.pckl', 'wb'))
@@ -329,7 +321,7 @@ if __name__ == '__main__':
             model.load_state_dict(ckpt['state_dict'])
             model.to('cuda:0')
             print('Classfication before training:')
-            preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, subsample=True)
+            preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix)
         train_dl = DataLoader(x, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=0, pin_memory=True)
         print('Validation loss:')
         trainer.validate(model, test_dl)
@@ -349,7 +341,8 @@ if __name__ == '__main__':
     if args.classify:
         print('Classfication after whole script:')
         model.to('cuda:0')
-        preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, subsample=True)
+        with torch.no_grad():
+            preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, num_subsamples=10)
     if args.generate:
         print('Generation after whole script:')
         if model.pred_pair_probs:

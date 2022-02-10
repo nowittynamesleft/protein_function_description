@@ -187,10 +187,9 @@ def seq_go_collate_pad(batch, seq_set_size=None):
     lengths = torch.tensor(lengths)
     max_len = torch.max(lengths)
     S_mask = torch.ones((len(batch), seq_set_size, max_len), dtype=bool)
-    for i in range(len(batch)):
-        for j in range(len(seq_set)):
-            S_mask[i, j, :lengths[i][j]] = False
-
+    for seq_set_ind in range(len(batch)):
+        for j in range(seq_set_size):
+            S_mask[seq_set_ind, j, :lengths[seq_set_ind][j]] = False
 
     S_padded = torch.zeros((len(batch), seq_set_size, max_len))
 
@@ -199,9 +198,9 @@ def seq_go_collate_pad(batch, seq_set_size=None):
         curr_S_padded = S_padded[seq_set_ind]
         curr_seq_set_lengths = lengths[seq_set_ind]
         if GO_present:
-            (seq_set, _) = batch[i]
+            (seq_set, _) = batch[seq_set_ind]
         else:
-            seq_set = batch[i][0]
+            seq_set = batch[seq_set_ind][0]
         pad_seq_set(curr_S_padded, seq_set, curr_seq_set_lengths, max_len)
         
     # pad GO descriptions
