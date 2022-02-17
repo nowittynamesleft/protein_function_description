@@ -56,7 +56,7 @@ class SequenceGOCSVDataset(Dataset):
     """
     def __init__(self, go_file, obo_file, num_samples, vocab=None, include_go=True, save_prefix='no_prefix'):
         self.read_annot_info(go_file)
-        self.go_annot_mat = create_annot_mat(self.all_prot_ids, self.go_terms, self.go2prot_ids)
+        self.go_annot_mat, self.prot_id2annot_ind = create_annot_mat(self.all_prot_ids, self.go_terms, self.go2prot_ids)
         self.init_obo_info(obo_file)
         self.tokenize_descriptions(self.go_desc_strings, vocab, save_prefix)
         
@@ -74,7 +74,11 @@ class SequenceGOCSVDataset(Dataset):
         self.go2seqs = dict(zip(annot_df['GO-term'], prot_seq_rows))
         self.prot_lists = [prots.split(',') for prots in annot_df['Prot-names']]
         self.go2prot_ids = dict(zip(annot_df['GO-term'], self.prot_lists))
-        self.all_prot_ids = sorted(list(set([prot for prot_list in self.prot_lists for prot in prot_list])))
+        self.id2seq = {}
+        for i in range(len(prot_seq_rows)):
+            id2seq = dict(zip(self.prot_lists[i], prot_seq_rows[i]))
+            self.id2seq.update(id2seq)
+        self.all_prot_ids = sorted(self.id2seq.keys())
 
         self.go_terms = np.array(annot_df['GO-term'])
         self.go_names = np.array(annot_df['GO-name'])
@@ -107,15 +111,25 @@ class SequenceGOCSVDataset(Dataset):
         id_to_depth_bp = dict(nx.single_target_shortest_path_length(graph, 'GO:0008150'))
         id_to_depth_cc = dict(nx.single_target_shortest_path_length(graph, 'GO:0005575'))
         self.depths_of_go_terms = {}
+        self.branch_of_go_terms = {}
         for go_term in self.go_terms:
             if go_term in id_to_depth_mf:
                 self.depths_of_go_terms[go_term] = id_to_depth_mf[go_term]
+                self.branch_of_go_terms[go_term] = '<Branch-MF>'
             elif go_term in id_to_depth_bp:
                 self.depths_of_go_terms[go_term] = id_to_depth_bp[go_term]
+                self.branch_of_go_terms[go_term] = '<Branch-BP>'
             elif go_term in id_to_depth_cc:
                 self.depths_of_go_terms[go_term] = id_to_depth_cc[go_term]
+                self.branch_of_go_terms[go_term] = '<Branch-CC>'
             else:
                 print(go_term + ' NOT FOUND IN OBO')
+
+    
+    def check_prot_set_annots(self, prot_ids):
+        annot_inds = np.array([self.prot_id2annot_ind[prot_id] for prot_id in prot_ids])
+        valid_go_term_inds = np.all(self.go_annot_mat[annot_inds], axis=0)
+        return valid_go_term_inds
 
 
     def __getitem__(self, go_term_index):
@@ -244,5 +258,5 @@ def create_annot_mat(prot_ids, go_terms, go2prot_ids):
             annotated_prot_inds.append(prot_id2annot_ind[prot_id])
         annot_mat[:, i][annotated_prot_inds] = True
     
-    return annot_mat
+    return annot_mat, prot_id2annot_ind
 

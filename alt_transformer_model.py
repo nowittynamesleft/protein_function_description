@@ -151,8 +151,9 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         # len convert expects src_padding_mask to be all positions that HAVE tokens, so it is inverted here:
         transformed_embeds = transformed_embeds.reshape(batch_size*seq_set_len, max_len, -1)
         src_padding_mask = src_padding_mask.reshape(batch_size*seq_set_len, max_len)
-        len_trans_embeds, _ = self.len_convert(transformed_embeds, self._max_lens(src_padding_mask), ~src_padding_mask.bool()) 
-        len_trans_embeds = len_trans_embeds.reshape(batch_size, seq_set_len, max_len, -1)
+        non_padded_max_lens = self._max_lens(src_padding_mask)
+        len_trans_embeds, _ = self.len_convert(transformed_embeds, non_padded_max_lens, ~src_padding_mask.bool()) 
+        len_trans_embeds = len_trans_embeds.reshape(batch_size, seq_set_len, int(non_padded_max_lens[0].item()), -1)
         avg_src_transformed_embed = torch.mean(len_trans_embeds, dim=1)
         return avg_src_transformed_embed
 
@@ -266,7 +267,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         end_symbol = self.tgt_vocab_size - 1
         t = 1.0
         if len(pred_batch) == 4:
-            S_padded, S_pad_mask, actual_GO_padded, _ = pred_batch
+            S_padded, S_pad_mask, actual_GO_padded, actual_GO_pad_mask = pred_batch
         elif len(pred_batch) == 2:
             S_padded, S_pad_mask = pred_batch
         num_sets = S_padded.shape[0]
@@ -276,7 +277,8 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         all_final_candidate_probs = []
 
         for seq_set_ind in range(num_sets):
-            embedding = self.encode_seq_set(S_padded[seq_set_ind, ...], S_pad_mask[seq_set_ind, ...])
+            #import ipdb; ipdb.set_trace()
+            embedding = self.encode_seq_set(S_padded[seq_set_ind, ...].unsqueeze(0), S_pad_mask[seq_set_ind, ...].unsqueeze(0))
 
             curr_GO_padded = GO_padded[seq_set_ind]
             # init candidate sentences
@@ -361,7 +363,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             
             if len(pred_batch) == 4: # if the actual description was supplied in the batch to compare
                 print('Actual description:')
-                print(' '.join(self.convert_sample_preds_to_words(actual_GO_padded[seq_set_ind])))
+                print(' '.join(self.convert_sample_preds_to_words(actual_GO_padded[seq_set_ind][~actual_GO_pad_mask[seq_set_ind]])))
         return all_final_candidate_sentences, all_final_candidate_probs
 
 
@@ -386,7 +388,6 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         return optimizer
 
     def encode(self, src: Tensor, src_padding_mask: Tensor):
-        #import ipdb; ipdb.set_trace()
         batch_size, seq_set_len, max_len = src.shape
         src = src.reshape(-1, max_len) # make it one big batch
         src_padding_mask = src_padding_mask.reshape(-1, max_len) # make it one big batch

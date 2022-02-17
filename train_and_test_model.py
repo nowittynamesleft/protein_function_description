@@ -24,7 +24,7 @@ def arguments():
     #args.add_argument('--learning_rate', type=float, default=0.01)
     args.add_argument('annot_seq_file', type=str, help='Training annotation dataset')
     args.add_argument('test_annot_seq_file', type=str, help='Test annotation dataset for validation and prediction')
-    args.add_argument('--epochs', type=int, default=10)
+    args.add_argument('--epochs', type=int, default=100)
     args.add_argument('--batch_size', type=int, default=1)
     args.add_argument('--seq_set_len', type=int, default=32)
     args.add_argument('--emb_size', type=int, default=256)
@@ -46,6 +46,11 @@ def arguments():
             help='Load vocab from pickle file instead of assuming all description vocab is included in annot_seq_file')
     args.add_argument('--validate', action='store_true', 
             help='Validate and return loss for test_annot_seq_file')
+    args.add_argument('--no_val_loss', action='store_true', 
+            help='Validate every epoch')
+    args.add_argument('--no_early_stopping', action='store_true', 
+            help='No early stopping; train for the max epochs specified by --epochs')
+
 
     args = args.parse_args()
     print(args)
@@ -311,7 +316,14 @@ if __name__ == '__main__':
     #metric_callback = MetricsCallback()
     early_stopping_callback = EarlyStopping(monitor="val_loss", min_delta=0.00, patience=10)
     csv_logger = CSVLogger('lightning_logs', name=(args.save_prefix + '_experiment'))
-    trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs,  # mixed precision causes nan loss, so back to regular precision.
+    no_early_stopping = args.no_early_stopping
+    no_val_loss = args.no_val_loss
+    
+    if no_early_stopping:
+        trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs, 
+                logger=csv_logger)
+    else:
+        trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs,  # mixed precision causes nan loss, so back to regular precision.
             callbacks=[early_stopping_callback], logger=csv_logger)
 
     if args.load_model_predict is None:
@@ -320,13 +332,17 @@ if __name__ == '__main__':
             ckpt = torch.load(args.load_model)
             model.load_state_dict(ckpt['state_dict'])
             model.to('cuda:0')
-            print('Classfication before training:')
-            preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix)
+            if args.classify:
+                print('Classfication before training:')
+                preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix)
         train_dl = DataLoader(x, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=0, pin_memory=True)
         print('Validation loss:')
         trainer.validate(model, test_dl)
         print('Training...')
-        trainer.fit(model, train_dl, test_dl)
+        if no_val_loss:
+            trainer.fit(model, train_dl)
+        else:
+            trainer.fit(model, train_dl, test_dl)
         print('Length convert sigma after training:' + str(model.len_convert.sigma))
     else:
         print('Loading model for predicting only: ' + args.load_model_predict)
@@ -342,10 +358,10 @@ if __name__ == '__main__':
         print('Classfication after whole script:')
         model.to('cuda:0')
         with torch.no_grad():
-            preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, num_subsamples=10)
+            preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, num_subsamples=4)
     if args.generate:
         print('Generation after whole script:')
         if model.pred_pair_probs:
             model.pred_pair_probs = False
-        trainer.predict(model, test_dl)
+        sentences = trainer.predict(model, test_dl)
 
