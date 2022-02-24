@@ -64,6 +64,7 @@ class SequenceGOCSVDataset(Dataset):
         self.num_samples = num_samples
         self.collate_fn = partial(seq_go_collate_pad, seq_set_size=self.num_samples)
         self.include_go = include_go
+        self.include_all_valid_terms = False
         self.sample = True
 
 
@@ -126,26 +127,39 @@ class SequenceGOCSVDataset(Dataset):
                 print(go_term + ' NOT FOUND IN OBO')
 
     
-    def check_prot_set_annots(self, prot_ids):
+    def get_all_valid_term_inds(self, prot_ids):
         annot_inds = np.array([self.prot_id2annot_ind[prot_id] for prot_id in prot_ids])
         valid_go_term_inds = np.all(self.go_annot_mat[annot_inds], axis=0)
         return valid_go_term_inds
 
 
+    def get_all_valid_terms(self, prot_ids):
+        valid_term_inds = self.check_prot_set_annots(prot_ids)
+        valid_go_terms = self.go_terms[valid_term_inds]
+        if len(valid_go_terms) > 1:
+            print('More than one valid go term ind!')
+            print(valid_go_terms)
+
+        return valid_go_terms
+
+
     def __getitem__(self, go_term_index):
         annotated_seqs = self.get_annotated_seqs(go_term_index)[0]
+        annotated_prot_ids = self.get_annotated_prot_ids(go_term_index)[0]
         if self.num_samples == len(annotated_seqs):
             selected_inds = np.random.choice(np.arange(len(annotated_seqs)), size=self.num_samples, replace=False)
         else:
             selected_inds = np.random.choice(np.arange(len(annotated_seqs)), size=self.num_samples)
         if self.sample:
             selected_seqs = np.array(annotated_seqs)[selected_inds]
+            selected_prot_ids = np.array(annotated_prot_ids)[selected_inds]
         else:
             selected_seqs = np.array(annotated_seqs)
+            selected_prot_ids = np.array(annotated_prot_ids)
         if self.include_go: 
-            return (selected_seqs, self.go_token_ids[go_term_index])
+            return (selected_prot_ids, selected_seqs, self.go_token_ids[go_term_index])
         else:
-            return (selected_seqs,)
+            return (selected_prot_ids, selected_seqs)
 
     def set_sample_mode(self, sample_mode):
         self.sample = sample_mode
@@ -158,6 +172,9 @@ class SequenceGOCSVDataset(Dataset):
 
     def get_annotated_seqs(self, go_term_index):
         return (self.go2seqs[self.go_terms[go_term_index]],)
+
+    def get_annotated_prot_ids(self, go_term_index):
+        return (self.go2prot_ids[self.go_terms[go_term_index]],)
 
     def get_padded_descs(self):
         return pad_GO(self.go_token_ids)
@@ -176,14 +193,14 @@ def seq_go_collate_pad(batch, seq_set_size=None):
     Batch size X 2 (if GO included) list of tuples
     first index of tuple is sequence set of batch, so seq_set_size X 
     """
-    if len(batch[0]) == 2: # check whether there is a GO description set attached
+    if len(batch[0]) > 2: # check whether there is a GO description set attached
         GO_present = True
     else:
         GO_present = False
     lengths = []
     if GO_present:
         go_desc_lengths = []
-        for i, (seq_set, go_term_desc) in enumerate(batch):
+        for i, (prot_id_set, seq_set, go_term_desc) in enumerate(batch):
             go_desc_lengths.append(len(go_term_desc))
             lengths.append([])
             assert seq_set_size == len(seq_set)
@@ -192,7 +209,8 @@ def seq_go_collate_pad(batch, seq_set_size=None):
         max_go_desc_length = max(go_desc_lengths)
     else:
         for i in range(len(batch)):
-            seq_set = batch[i][0]
+            prot_id_set = batch[i][0]
+            seq_set = batch[i][1]
             assert seq_set_size == len(seq_set)
             lengths.append([])
             for j, seq in enumerate(seq_set):
@@ -212,9 +230,9 @@ def seq_go_collate_pad(batch, seq_set_size=None):
         curr_S_padded = S_padded[seq_set_ind]
         curr_seq_set_lengths = lengths[seq_set_ind]
         if GO_present:
-            (seq_set, _) = batch[seq_set_ind]
+            (prot_id_set, seq_set, _) = batch[seq_set_ind]
         else:
-            seq_set = batch[seq_set_ind][0]
+            (prot_id_set, seq_set) = batch[seq_set_ind]
         pad_seq_set(curr_S_padded, seq_set, curr_seq_set_lengths, max_len)
         
     # pad GO descriptions

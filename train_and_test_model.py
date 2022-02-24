@@ -246,28 +246,41 @@ def classification(model, dataset, save_prefix='no_prefix', num_subsamples=10):
     ground_truth = []
     print("Num subsamples per term:" + str(num_subsamples))
     for ind in tqdm.tqdm(included_go_inds):
-        seq_sets = [dataset[ind] for it in range(num_subsamples)]
-        ground_truth.extend([ind]*num_subsamples)
-        S_padded, S_mask = seq_go_collate_pad(seq_sets, seq_set_size=len(seq_sets[0][0])) # batch sizes of 1 each, index out of it
+        (prot_id_sets, seq_sets) = zip(*[dataset[ind] for it in range(num_subsamples)])
+        valid_terms = [dataset.get_all_valid_term_inds(prot_id_set) for prot_id_set in prot_id_sets]
+        ground_truth.extend(valid_terms)
+        S_padded, S_mask = seq_go_collate_pad(list(zip(prot_id_sets, seq_sets)), seq_set_size=len(seq_sets[0])) # batch sizes of 1 each, index out of it
         seq_set_desc_probs, seq_set_desc_token_probs = model.classify_seq_sets(S_padded, S_mask, GO_padded, GO_pad_masks, len_penalty=True) 
         preds.append(seq_set_desc_probs)
         all_pred_token_probs.append(seq_set_desc_token_probs)
 
-    #import ipdb; ipdb.set_trace()
     preds = torch.cat(preds)
-    ground_truth = torch.tensor(ground_truth)
-    pred_outdict = {'seq_set_go_term_inds': ground_truth, 'all_term_preds': preds, 'all_term_token_probs': seq_set_desc_token_probs, 'go_descriptions': np.array(dataset.go_descriptions)}
+    pred_outdict = {'seq_set_go_term_inds': ground_truth, 'all_term_preds': preds, 'all_term_token_probs': all_pred_token_probs, 'go_descriptions': np.array(dataset.go_descriptions)}
     pickle.dump(pred_outdict, open(save_prefix + '_pred_dict.pckl', 'wb'))
-
+    print("Mean reciprocal rank")
+    mrr = mean_reciprocal_rank(preds, ground_truth)
+    print(mrr)
+    
+    '''
     if preds.shape[1] < 1000:
         accs = accuracy(preds, ground_truth, topk=(5, 4, 3, 2, 1))
         print('Len penalty: Top 5, 4, 3, 2, 1 accuracies: ' + str(accs))
     else:
         accs = accuracy(preds, ground_truth, topk=(1000, 500, 100, 50, 10, 5, 1))
         print('Len penalty: Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs))
+    '''
 
     return preds, accs
     
+
+def mean_reciprocal_rank(preds, ground_truth):
+    rankings = torch.argsort(torch.sort(preds, dim=1, descending=True)[1], dim=1) + 1
+    recip_rankings = 1/rankings
+    relevant_recip_ranks = [recip_rankings[i, go_inds] for i, go_inds in enumerate(ground_truth)]
+    relevant_recip_ranks = torch.tensor([torch.sum(recips)/len(recips) for recips in relevant_recip_ranks])
+    mrr = relevant_recip_ranks.mean()
+    return mrr
+
 
 def get_subset_dataloader(dataset, inds, batch_size, collate_fn):
     data = Subset(dataset, inds)

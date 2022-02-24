@@ -2,12 +2,16 @@ import numpy as np
 import pickle
 import sys
 from data import SequenceGOCSVDataset
+import torch
+from scipy.stats import pearsonr
 
 
 #TODO: need to have a function that takes in a model and zero-shot predictions 
 # and returns the logits for the predicted GO terms.
+'''
 def get_word_logits(model, seq_sets, descriptions):
     for seq_set in seq_sets:
+'''
 
 
 def compute_oversmoothing_logratio(logits, target, non_pad_mask, eos_idx, margin=1e-5):
@@ -46,57 +50,24 @@ def tokenizations_to_descriptions(tokenized_descs): # assume @@ is BPE separator
 
 def compute_global_average_properties(pred_dict, dataset, k=10):
     # get rankings for each seq set and find average rankings of each term for whole dataset
-    rankings = np.argsort(pred_dict['all_term_preds'], axis=-1)[::-1] # descending order
-    predicted_terms = rankings[:, 0]
-    avg_top_rankings = np.mean(rankings, axis=0)
-
-    # average properties for terms in the dataset
-    top_avg_terms = np.argsort(avg_top_rankings)
+    rankings = torch.sort(pred_dict['all_term_preds'], dim=1)[1] + 1
+    recip_rankings = 1/rankings
+    relevant_recip_ranks = recip_rankings[torch.arange(0, rankings.shape[0]), pred_dict['seq_set_go_term_inds']]
+    mrr = relevant_recip_ranks.mean()
 
     # calculate average description length of terms
     go_descs = np.array(dataset.go_descriptions)
-    predicted_tokenizations = go_descs[predicted_terms]
-    predicted_descriptions = tokenizations_to_descriptions(predicted_tokenizations)
 
-    top_avg_go_term_descs = go_descs[top_avg_terms]
-    top_go_term_desc_lengths = [len(desc) for desc in top_avg_go_term_descs]
-    print('Top '  + str(k) + ' lengths: ' +str(top_go_term_desc_lengths[:k]))
+    lengths = [len(go_descs[ind]) for ind in pred_dict['seq_set_go_term_inds']]
+    depths = [dataset.depths_of_go_terms[dataset.go_terms[i]] for i in pred_dict['seq_set_go_term_inds']]
 
-    # calculate average depth of terms
-    top_avg_go_term_depths = np.array(dataset.depths_of_go_terms[dataset.go_terms[i]] for i in top_avg_terms)
-    print('Top '  + str(k) + ' depths in GO tree: ' + str(top_go_term_desc_lengths[:k]))
+    corr_length = pearsonr(relevant_recip_ranks, lengths)
+    corr_depth = pearsonr(relevant_recip_ranks, depths)
+    print('Correlation between relevant reciprocal rank and length of description')
+    print(corr_length)
+    print('Correlation between relevant reciprocal rank and depth of term')
+    print(corr_depth)
 
-    # calculate average ranking of words in the list of predictions
-    # for a given word, what was the average rank of the description it was in?
-    '''
-    word_rank_sums = {}
-    total_occurences = {}
-    for rank, desc in enumerate(go_descs[top_avg_terms]):
-        for token in desc:
-            if token in word_rank_sums:
-                word_rank_sums[token] += rank
-                total_occurences[token] += 1
-            else:
-                word_rank_sums[token] = rank
-                total_occurences[token] = 1
-    top_word_list = sorted(word_rank_sums.keys(), key=lambda word: word_rank_sums[word]/total_occurences[word])
-    top_word_rankings = [word_rank_sums[word]/total_occurences[word] for word in top_word_list]
-    '''
-
-    import ipdb; ipdb.set_trace()
-    occurences_in_top_k = {}
-    for i in range(0, k):
-        desc = go_descs[top_avg_terms[i]]
-        for token in desc:
-            if token in occurences_in_top_k:
-                occurences_in_top_k[token] += 1
-            else:
-                occurences_in_top_k[token] = 1
-    most_common_words_in_top_k_go_terms = sorted(occurences_in_top_k.keys(), key=lambda word: occurences_in_top_k[word]) 
-    print('Done')
-
-
-     
 
 if __name__ == '__main__':
     pred_dict = pickle.load(open(sys.argv[1],'rb'))
