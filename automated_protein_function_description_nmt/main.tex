@@ -1,6 +1,6 @@
 \documentclass{specification}
 
-\title{Desired Attributes of Protein Function Description Model}
+\title{Desired Attributes of a Protein Function Description Model}
 \author{Meet Barot}
 
 \begin{document}
@@ -8,15 +8,54 @@
 \maketitle
 
 \attribute*
-For a given sequence set:
+
+Annotation coherence.
+
+Given a sequence set that the model is assigning scores of function descriptions:
+
 Descriptions of GO terms that annotate the entire sequence set should be scored higher than terms that do not annotate the entire sequence set.
 
-\attribute*
-Among terms that do annotate the whole set, the model should score more specific terms higher than less specific terms.
+Let $D_{S}$ be the GO term descriptions associated with sequence set S.
+
+\[P(d \in D_{S} | S) > P(d \notin D_{S} | S)\]
 
 \attribute*
+
+Specificity preference.
+
+Among terms that do annotate the whole set, the model should score more specific terms higher than less specific terms.
+
+Let $t(d)$ be the depth of a GO term description $d$, and $\delta$ is an arbitrary depth.
+\[P(d \in D_{S}, t(d) \geq \delta | S) > P(d \in D_{S}, t(d) < \delta | S)\]
+
+\attribute*
+
+Branch equality.
 
 Among the most specific terms that annotate the whole set, descriptions from all three branches of GO should be scored equally.
 
+Let $B_i$ be the ith GO branch, and $D_{S, B_i}$ be the descriptions associated with sequence set S that are in branch $B_i$.
+
+\[P(d \in D_{S, B_i}, t(d) = \delta | S) = P(d \in D_{S, B_j}, t(d) = \delta | S)\]
+
+\attribute*
+
+Annotation robustness.
+
+Any set of sequences that have the same exact set of GO descriptions in common should produce the same scores for those GO descriptions.
+
+Let $S_i$ and $S_j$ be different sequence sets such that $D_{S_i} = D_{S_j}$.
+
+\[P(d \in D_{S_i} | S_i) = P(d \in D_{S_j} | S_j)\]
+
+%\attribute*
+ 
+%Commonality 
+%
+%Having a sequence in the set with a sequence that has no annotations in common with the rest of the set besides the root terms should change the scores to score only the root terms highly.
+%
+%Let $s$ be a protein sequence such that $D_{s} \cap D_{S} = \emptyset$.
+%\[P(d \in D_{S} - D_{S, root} | S + s) = 0\]
+%\[P(d \in D_{S, root} | S + s) = 1\]
 
 \end{document}
