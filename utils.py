@@ -216,7 +216,7 @@ def annotation_correctness(log_prob_mat, correct_go_inds):
     for seq_set_ind in range(num_seq_sets):
         row = log_prob_mat[seq_set_ind, :]
         correct_mask = torch.zeros_like(row, dtype=bool)
-        correct_mask[correct_go_inds] = True
+        correct_mask[correct_go_inds[seq_set_ind]] = True
         correct = row[correct_mask]
         incorrect = row[~correct_mask]
         row_correctness = 0
@@ -234,9 +234,9 @@ def specificity_preference(log_prob_mat, correct_go_inds, parent_graph):
     spec_preference = 0
     num_seq_sets = log_prob_mat.shape[0]
     for seq_set_ind in range(num_seq_sets):
-        row = log_prob_mat[seq_set_ind, :
+        row = log_prob_mat[seq_set_ind, :]
         correct_mask = torch.zeros_like(row, dtype=bool)
-        correct_mask[correct_go_inds] = True
+        correct_mask[correct_go_inds[seq_set_ind]] = True
         correct = row[correct_mask]
         parents_correct = parent_graph[correct_mask, correct_mask]
         row_spec_preference = 0
@@ -247,4 +247,27 @@ def specificity_preference(log_prob_mat, correct_go_inds, parent_graph):
     spec_preference /= num_seq_sets 
     return spec_preference
 
-
+def annotation_robustness(log_prob_mat, n, correct_go_inds):
+    # assumes log_prob_mat is n*number of GO terms X number of GO terms matrix,
+    # where n is the number of subsamples per row
+    # each n rows has the same GO terms assigned to them
+    assert n > 1
+    assert torch.equal(torch.tensor(correct_go_inds[0]), torch.tensor(correct_go_inds[1]))
+    score_difference = 0
+    num_go_term_sets = int(log_prob_mat.shape[0]/n)
+    for go_term_set_ind in range(num_go_term_sets):
+        rows = log_prob_mat[go_term_set_ind:go_term_set_ind + n, :]
+        correct_mask = torch.zeros_like(rows[0, :], dtype=bool)
+        correct_mask[correct_go_inds[go_term_set_ind]] = True
+        correct_scores = rows[:, correct_mask]
+        # matrix of scores, columns should have values that are close
+        total_difference = 0
+        num_correct_terms = correct_scores.shape[1]
+        assert n == correct_scores.shape[0]
+        for column in range(correct_scores.shape[1]):
+            curr_scores = correct_scores[:, column]
+            for score in curr_scores:
+                total_difference += torch.abs(torch.sum(score - curr_scores))
+        score_difference += total_difference/(num_correct_terms*(n**2))
+    score_difference /= num_go_term_sets
+    return score_difference
