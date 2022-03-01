@@ -208,4 +208,43 @@ def ensure_dir(file_path):
         print('Creating directory ' + directory)
         os.makedirs(directory) 
 
+def annotation_correctness(log_prob_mat, correct_go_inds):
+    # correct_go_inds is a list of lists of go indices that are assigned to
+    # a sequence set.
+    correctness = 0
+    num_seq_sets = log_prob_mat.shape[0]
+    for seq_set_ind in range(num_seq_sets):
+        row = log_prob_mat[seq_set_ind, :]
+        correct_mask = torch.zeros_like(row, dtype=bool)
+        correct_mask[correct_go_inds] = True
+        correct = row[correct_mask]
+        incorrect = row[~correct_mask]
+        row_correctness = 0
+        for correct_score in correct:
+            row_correctness += torch.sum(correct_score > incorrect)
+        row_correctness = row_correctness/(len(correct)*len(incorrect))
+        correctness += row_correctness
+    correctness /= num_seq_sets
+
+    return correctness
+
+
+def specificity_preference(log_prob_mat, correct_go_inds, parent_graph):
+    # need to calculate only over correct go inds...
+    spec_preference = 0
+    num_seq_sets = log_prob_mat.shape[0]
+    for seq_set_ind in range(num_seq_sets):
+        row = log_prob_mat[seq_set_ind, :
+        correct_mask = torch.zeros_like(row, dtype=bool)
+        correct_mask[correct_go_inds] = True
+        correct = row[correct_mask]
+        parents_correct = parent_graph[correct_mask, correct_mask]
+        row_spec_preference = 0
+        for ind, correct_score in enumerate(correct):
+            parent_scores = correct[parents_correct[ind]] 
+            row_spec_preference += torch.sum(correct_score > parent_score)/len(parent_scores)# if there are multiple direct parents, average them
+        spec_preference += row_spec_preference 
+    spec_preference /= num_seq_sets 
+    return spec_preference
+
 
