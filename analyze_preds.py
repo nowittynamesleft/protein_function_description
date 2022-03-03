@@ -81,4 +81,5 @@ if __name__ == '__main__':
     print('Annotation correctness: ' + str(correctness))
     robustness_score = annotation_robustness(prob_mat, 4, correct_go_inds)
     print('Annotation robustness (lower is better): ' + str(robustness_score))
-    print()
+    specificity_preference = specificity_preference(prob_mat, correct_go_inds, x.adj_mat)
+    print('Specificity preference: ' + str(specificity_preference))

@@ -238,12 +238,15 @@ def specificity_preference(log_prob_mat, correct_go_inds, parent_graph):
         correct_mask = torch.zeros_like(row, dtype=bool)
         correct_mask[correct_go_inds[seq_set_ind]] = True
         correct = row[correct_mask]
-        parents_correct = parent_graph[correct_mask, correct_mask]
+        parents_correct = parent_graph[correct_mask, :][:, correct_mask]
         row_spec_preference = 0
+        num_terms_with_parents = torch.sum(torch.any(parents_correct, dim=1))
         for ind, correct_score in enumerate(correct):
             parent_scores = correct[parents_correct[ind]] 
-            row_spec_preference += torch.sum(correct_score > parent_score)/len(parent_scores)# if there are multiple direct parents, average them
-        spec_preference += row_spec_preference 
+            if len(parent_scores) > 0:
+                row_spec_preference += torch.sum(correct_score > parent_scores)/len(parent_scores)# if there are multiple direct parents, average them
+        if num_terms_with_parents > 0:
+            spec_preference += row_spec_preference/num_terms_with_parents
     spec_preference /= num_seq_sets 
     return spec_preference
 
