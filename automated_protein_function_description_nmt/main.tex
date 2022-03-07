@@ -1,5 +1,6 @@
 \documentclass{specification}
 \usepackage[backend=bibtex]{biblatex}
+\usepackage{dsfont}
 \bibliography{bibliography}
 
 
@@ -31,9 +32,13 @@ Let $D_{S}$ be the GO term descriptions associated with sequence set S.
 
 \[P(d \in D_{S} | S) > P(d \notin D_{S} | S)\]
 
+%A way to measure this attribute would be to calculate: 
+%\[\frac{1}{|D_{S}|*|D_{S}^{c}|}\sum_{d_i \in D_{S}, d_j \notin D_{S}} P(d_i | S) - P(d_j | S)\]
+%where $D_{S}^{c}$ is the complement of $D_{S}$.
+
 A way to measure this attribute would be to calculate: 
-\[\frac{1}{|D_{S}|*|D_{S}^{c}|}\sum_{d_i \in D_{S}, d_j \notin D_{S}} P(d_i | S) - P(d_j | S)\]
-where $D_{S}^{c}$ is the complement of $D_{S}$.
+\[\frac{1}{|D_{S}|*|D_{S}^{c}|}\sum_{d_i \in D_{S}, d_j \notin D_{S}} \mathds{1}(P(d_i | S) > P(d_j | S))\]
+where $D_{S}^{c}$ is the complement of $D_{S}$ and $\mathds{1}$ is the indicator function.
 
 \section*{Attribute 2: Specificity preference.}
 
@@ -42,8 +47,13 @@ Among terms that do annotate the whole set, the model should score child terms h
 \[P(d \in D_{S}| S) > P(A(d) \in D_{S}| S)\]
 Note: any protein set that is annotated with $d$ would always be annotated with $A(d)$, $A(A((d))$ and so on.
 
+%A way to measure this attribute would be to calculate:
+%\[\frac{1}{|D_{S}|}\sum_{d_i \in D_{S}} P(d_i | S) - P(A(d_i) | S)\]
+
 A way to measure this attribute would be to calculate:
-\[\frac{1}{|D_{S}|}\sum_{d_i \in D_{S}} P(d_i | S) - P(A(d_i) | S)\]
+\[\frac{1}{|D_{S}|}\sum_{d_i \in D_{S}} \mathds{1}(P(d_i | S) > P(A(d_i) | S))\]
+
+
 %Among terms that do annotate the whole set, the model should score more specific terms higher than less specific terms.
 
 %Let $t(d)$ be the depth of a GO term description $d$, and $\delta$ is an arbitrary depth.
@@ -68,9 +78,10 @@ Let $S_i$ and $S_j$ be different sequence sets such that $D_{S_i} = D_{S_j}$.
 
 \[P(d \in D_{S_i} | S_i) = P(d \in D_{S_i} | S_j)\]
 
-A way to measure this attribute would be to calculate: 
+A way to measure this attribute would be to calculate the ratio of the probabilities, using the difference of the log probabilities: 
 
-\[\frac{1}{N^{2}*|D_{S_i}|}\sum_{S_i, S_j, d_{k} \in D_{S_i}} |P(d_k | S_i) - P(d_k | S_j)|\]
+\[\frac{1}{N^{2}*|D_{S_i}|}\sum_{S_i, S_j, d_{k} \in D_{S_i}} |\log P(d_k | S_i) - \log P(d_k | S_j)|\]
+%\[\frac{1}{N^{2}*|D_{S_i}|}\sum_{S_i, S_j, d_{k} \in D_{S_i}} |P(d_k | S_i) - P(d_k | S_j)|\]
 
 where $N$ is the total number of sequence sets that have the exact set of GO descriptions $D_{S_i}$. In reality, this number may be too large to actually sum (especially if $|D_{S_i}|$ is small), so we would approximate this measure by subsampling $n < N$ sequence sets to average over instead. 
 %\attribute*
@@ -86,6 +97,9 @@ where $N$ is the total number of sequence sets that have the exact set of GO des
 
 % If the function description model also is given depth and branch, the desired attributes
 % would probably be changed since the task is different. Kyunghyun is saying to focus on the current model and how I would evaluate it, and later additions to the training loop can be separate.
+
+\section*{Additional Evaluation}
+As these scoring metrics for evaluation are automated, they can be used for optimizing the architecture and other hyperparameters of the model (either manually or with some search method). However, in the case of actual use on proteins that are not very well studied, it can be difficult to know whether a given description is accurate. Human-assisted evaluation will be needed for the descriptions generated for a given set of novel proteins. This feedback could be used to fine-tune the model to produce more accurate, fluid or generally desirable descriptions of proteins, as has been done for document summarization models \cite{finetuningWithHuman, learningToSummarize}.
 
 \printbibliography
 
