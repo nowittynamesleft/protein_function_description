@@ -74,16 +74,16 @@ A way to measure this attribute would be to calculate:
 
 Any set of sequences that have the same exact set of GO descriptions in common should produce the same scores for those GO descriptions.
 
-Let $S_i$ and $S_j$ be different sequence sets such that $D_{S_i} = D_{S_j}$.
+Let $S_i$ and $S_j$ be different sequence sets such that $D_{S_i} = D_{S_j}$ and $S_i \neq S_j$.
 
 \[P(d \in D_{S_i} | S_i) = P(d \in D_{S_i} | S_j)\]
 
 A way to measure this attribute would be to calculate the ratio of the probabilities, using the difference of the log probabilities: 
 
-\[\frac{1}{N^{2}*|D_{S_i}|}\sum_{S_i, S_j, d_{k} \in D_{S_i}} |\log P(d_k | S_i) - \log P(d_k | S_j)|\]
+\[\frac{1}{N*(N-1)*|D_{S_i}|}\sum_{S_i, S_j, d_{k} \in D_{S_i}} |\log P(d_k | S_i) - \log P(d_k | S_j)|\]
 %\[\frac{1}{N^{2}*|D_{S_i}|}\sum_{S_i, S_j, d_{k} \in D_{S_i}} |P(d_k | S_i) - P(d_k | S_j)|\]
 
-where $N$ is the total number of sequence sets that have the exact set of GO descriptions $D_{S_i}$. In reality, this number may be too large to actually sum (especially if $|D_{S_i}|$ is small), so we would approximate this measure by subsampling $n < N$ sequence sets to average over instead. 
+where $N$ is the total number of sequence sets that have the exact set of GO descriptions $D_{S_i}$. In reality, this number may be too large to actually sum (especially if $|D_{S_i}|$ is small), so we would approximate this measure by subsampling $n < N$ sequence sets to average over instead. The sum is only calculated over non-identical pairs of sequence sets.
 %\attribute*
  
 %Commonality 
@@ -100,6 +100,10 @@ where $N$ is the total number of sequence sets that have the exact set of GO des
 
 \section*{Additional Evaluation}
 As these scoring metrics for evaluation are automated, they can be used for optimizing the architecture and other hyperparameters of the model (either manually or with some search method). However, in the case of actual use on proteins that are not very well studied, it can be difficult to know whether a given description is accurate. Human-assisted evaluation will be needed for the descriptions generated for a given set of novel proteins. This feedback could be used to fine-tune the model to produce more accurate, fluid or generally desirable descriptions of proteins, as has been done for document summarization models \cite{finetuningWithHuman, learningToSummarize}.
+
+One possible way of obtaining human feedback would be to ask an expert with knowledge of the Gene Ontology and familiarity with some families of proteins to choose between two descriptions for a given sequence set that is generated from a trained model.
+
+Doing this over a large enough dataset would allow us to train a reward estimation model that can then be used to fine-tune the original trained model using reinforcement learning. However, this would be expensive, as the task needs to be done by an expert.
 
 \printbibliography
 
