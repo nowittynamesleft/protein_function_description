@@ -80,6 +80,6 @@ if __name__ == '__main__':
     correctness = annotation_correctness(prob_mat, correct_go_inds)
     print('Annotation correctness: ' + str(correctness))
     robustness_score = annotation_robustness(prob_mat, 4, correct_go_inds)
-    print('Annotation robustness (lower is better): ' + str(robustness_score))
+    print('Annotation robustness (avg. spearman correlation between rankings. [-1, 1]): ' + str(robustness_score))
     specificity_preference = specificity_preference(prob_mat, correct_go_inds, x.adj_mat)
     print('Specificity preference: ' + str(specificity_preference))

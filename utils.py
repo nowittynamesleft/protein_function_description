@@ -253,6 +253,7 @@ def specificity_preference(log_prob_mat, correct_go_inds, parent_graph):
     spec_preference /= num_seq_sets_with_parent_terms
     return spec_preference
 
+'''
 def annotation_robustness(log_prob_mat, n, correct_go_inds):
     # assumes log_prob_mat is n*number of GO terms X number of GO terms matrix,
     # where n is the number of subsamples per row
@@ -282,32 +283,106 @@ def annotation_robustness(log_prob_mat, n, correct_go_inds):
         score_difference += curr_diff
     score_difference /= num_go_term_sets
     return score_difference
+'''
+
+def _get_ranks(x: torch.Tensor) -> torch.Tensor:
+    tmp = x.argsort()
+    ranks = torch.zeros_like(tmp)
+    ranks[tmp] = torch.arange(len(x))
+    return ranks
+
+def spearman_correlation(x: torch.Tensor, y: torch.Tensor):
+    """Compute correlation between 2 1-D vectors
+    Args:
+        x: Shape (N, )
+        y: Shape (N, )
+    """
+    x_rank = _get_ranks(x)
+    y_rank = _get_ranks(y)
+    
+    n = x.size(0)
+    upper = 6 * torch.sum((x_rank - y_rank).pow(2))
+    down = n * (n ** 2 - 1.0)
+    return 1.0 - (upper / down)
+
+
+def annotation_robustness(log_prob_mat, n, correct_go_inds):
+    # assumes log_prob_mat is n*number of GO terms X number of GO terms matrix,
+    # where n is the number of subsamples per row
+    # each n rows has the same GO terms assigned to them
+    # pearson's rank correlation version
+    assert n > 1
+    assert torch.equal(torch.tensor(correct_go_inds[0]), torch.tensor(correct_go_inds[n - 1]))
+    all_corr = 0
+    num_go_term_sets = int(log_prob_mat.shape[0]/n)
+    for go_term_set_ind in range(num_go_term_sets):
+        rows = log_prob_mat[go_term_set_ind*n:go_term_set_ind*n + n, :]
+        correct_mask = torch.zeros_like(rows[0, :], dtype=bool)
+        correct_mask[correct_go_inds[go_term_set_ind*n]] = True
+        correct_scores = rows[:, correct_mask]
+        # matrix of scores, columns should have values that are close
+        num_correct_terms = correct_scores.shape[1]
+        if num_correct_terms > 1: # rank only makes sense when there is more than one score to compare
+            assert n == correct_scores.shape[0]
+            total_correlation = 0
+            for score_vec_ind in range(correct_scores.shape[0]):
+                score_vec = correct_scores[score_vec_ind, :]
+                for score_vec_2_ind in range(correct_scores.shape[0]): 
+                    score_vec_2 = correct_scores[score_vec_2_ind, :]
+                    if score_vec_ind != score_vec_2_ind:
+                        total_correlation += spearman_correlation(score_vec, score_vec_2)
+            curr_avg_corr = total_correlation/(n*(n-1))
+            all_corr += curr_avg_corr
+    all_corr /= num_go_term_sets
+    return all_corr
 
 
 def test_metrics():
     ac_test_probs = torch.Tensor([[0.7, 0.3, 0.9, 0.4, 0.9], 
-            [0.9, 0.9, 0.2, 0.9, 0.8], 
-            [0.2, 0.9, 0.7, 0.2, 0.8], 
-            [0.3, 0.9, 0.2, 0.8, 0.9],
-            [0.3, 0.9, 0.9, 0.1, 0.9]])
+                                  [0.9, 0.9, 0.2, 0.9, 0.8], 
+                                  [0.2, 0.9, 0.7, 0.2, 0.8], 
+                                  [0.3, 0.9, 0.2, 0.8, 0.9],
+                                  [0.3, 0.9, 0.9, 0.1, 0.9]])
+
     ac_correct_inds = torch.eye(5).bool()
     ac = annotation_correctness(ac_test_probs, ac_correct_inds)
     print('Annotation correctness test: ' + str(ac))
     assert ac == 0.5
 
-    sp_test_probs = torch.Tensor([[0.2, 0.1, 0.1, 0.05, 0.05], [0.1, 0.1, 0.1, 0.1, 0.1], [0.1, 0.1, 0.15, 0.1, 0.1], [0.1, 0.1, 0.1, 0.15, 0.1], [0.1, 0.1, 0.1, 0.1, 0.1]])
+    sp_test_probs = torch.Tensor([[0.2, 0.1, 0.1, 0.05, 0.05], 
+                                  [0.1, 0.1, 0.1, 0.1, 0.1], 
+                                  [0.1, 0.1, 0.15, 0.1, 0.1], 
+                                  [0.1, 0.1, 0.1, 0.15, 0.1], 
+                                  [0.1, 0.1, 0.1, 0.1, 0.1]])
+
     sp_correct_inds = torch.triu(torch.ones((5,5))).bool()
     sp_parent_graph = torch.diag(torch.tensor([1, 1, 1, 1]), 1).bool()
     sp = specificity_preference(sp_test_probs, sp_correct_inds, sp_parent_graph)
     print('Specificity preference test: ' + str(sp))
     assert sp == 0.5
 
-    ar_test_probs = torch.Tensor([[1/3, 1, 0.5], [2/3, 2/3, 0], [1/3, 1/3, 0], [0.4, 0, 0], [0.9, 1, 0], [0.9, 0, 1]])
-    n = 3
-    ar_correct_go_inds = torch.Tensor([[1, 1, 0], [1, 1, 0], [1, 1, 0], [0, 1, 1], [0, 1, 1], [0, 1, 1]]).bool()
+    ar_test_probs = torch.Tensor([[0.2, 0.3, 0.5], 
+                                  [0.1, 0.5, 0], 
+                                  [0.1, 0.2, 0], 
+                                  [0.5, 0.3, 0], 
+                                  
+                                  [0.4, 0.2, 0], 
+                                  [0.9, 1, 0], 
+                                  [0.3, 0.4, 0.3], 
+                                  [0.8, 0.7, 0.9]])
+    n = 4
+    ar_correct_go_inds = torch.Tensor([[1, 1, 0], 
+                                       [1, 1, 0], 
+                                       [1, 1, 0], 
+                                       [1, 1, 0], 
+                                       [0, 1, 1], 
+                                       [0, 1, 1], 
+                                       [0, 1, 1], 
+                                       [0, 1, 1]]).bool()
+
     ar = annotation_robustness(ar_test_probs, n, ar_correct_go_inds)
     print('Annotation robustness test: ' + str(ar))
-    assert ar == 0.5
+    assert ar == 0.0
 
 
 if __name__ == '__main__':
