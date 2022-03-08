@@ -70,20 +70,34 @@ A way to measure this attribute would be to calculate:
 %Problems with this: depth may not be comparable across branches or even within the same branch. Also, if a protein set is well studied within one branch but not another, it may not be correct to say that the ideal model would have the most specific terms in each branch be equally scored.
 
 %\section*{Attribute 4: Annotation robustness.}
+
 \section*{Attribute 3: Annotation robustness.}
 
-Any set of sequences that have the same exact set of GO descriptions in common should produce the same scores for those GO descriptions.
+Any set of sequences that have the same exact set of GO descriptions in common should produce scores with the same rankings for those GO descriptions.
 
-Let $S_i$ and $S_j$ be different sequence sets such that $D_{S_i} = D_{S_j}$ and $S_i \neq S_j$.
+Let $S_i$ and $S_j$ be different sequence sets such that $D_{S_i} = D_{S_j}$ and $S_i \neq S_j$, and let $R(X)$ be a ranking function that gives the ranks of entries in $X$, in descending order.
 
-\[P(d \in D_{S_i} | S_i) = P(d \in D_{S_i} | S_j)\]
+\[R_{d}(P(d \in D_{S_i} | S_i)) = R_{d}(P(d \in D_{S_i} | S_j))\]
 
-A way to measure this attribute would be to calculate the ratio of the probabilities, using the difference of the log probabilities: 
+A way to measure this attribute would be to calculate the average Spearman's rank correlation of the rankings for all sequence sets' correct descriptions: 
 
-\[\frac{1}{N*(N-1)*|D_{S_i}|}\sum_{S_i, S_j, d_{k} \in D_{S_i}} |\log P(d_k | S_i) - \log P(d_k | S_j)|\]
-%\[\frac{1}{N^{2}*|D_{S_i}|}\sum_{S_i, S_j, d_{k} \in D_{S_i}} |P(d_k | S_i) - P(d_k | S_j)|\]
+\[\frac{1}{N*(N-1)}\sum_{S_i, S_j} \frac{\textnormal{cov}(R(P(D_{S_i} | S_i)), R(P(D_{S_i} | S_j))}{\sigma_{P(D_{S_i} | S_i))}\sigma_{P(D_{S_i} | S_j))}}\]
 
 where $N$ is the total number of sequence sets that have the exact set of GO descriptions $D_{S_i}$. In reality, this number may be too large to actually sum (especially if $|D_{S_i}|$ is small), so we would approximate this measure by subsampling $n < N$ sequence sets to average over instead. The sum is only calculated over non-identical pairs of sequence sets.
+
+%\section*{Attribute 3: Annotation robustness.}
+%
+%Any set of sequences that have the same exact set of GO descriptions in common should produce the same scores for those GO descriptions.
+%
+%Let $S_i$ and $S_j$ be different sequence sets such that $D_{S_i} = D_{S_j}$ and $S_i \neq S_j$.
+%
+%\[P(d \in D_{S_i} | S_i) = P(d \in D_{S_i} | S_j)\]
+%
+%A way to measure this attribute would be to calculate the ratio of the probabilities, using the difference of the log probabilities: 
+%
+%\[\frac{1}{N*(N-1)*|D_{S_i}|}\sum_{S_i, S_j, d_{k} \in D_{S_i}} |\log P(d_k | S_i) - \log P(d_k | S_j)|\]
+
+%where $N$ is the total number of sequence sets that have the exact set of GO descriptions $D_{S_i}$. In reality, this number may be too large to actually sum (especially if $|D_{S_i}|$ is small), so we would approximate this measure by subsampling $n < N$ sequence sets to average over instead. The sum is only calculated over non-identical pairs of sequence sets.
 %\attribute*
  
 %Commonality 
