@@ -32,11 +32,11 @@ Let $D_{S}$ be the GO term descriptions associated with sequence set S.
 
 \[P(d \in D_{S} | S) > P(d \notin D_{S} | S)\]
 
-%A way to measure this attribute would be to calculate: 
+%A way to measure this attribute would be to calculate:
 %\[\frac{1}{|D_{S}|*|D_{S}^{c}|}\sum_{d_i \in D_{S}, d_j \notin D_{S}} P(d_i | S) - P(d_j | S)\]
 %where $D_{S}^{c}$ is the complement of $D_{S}$.
 
-A way to measure this attribute would be to calculate: 
+A way to measure this attribute would be to calculate:
 \[\frac{1}{|D_{S}|*|D_{S}^{c}|}\sum_{d_i \in D_{S}, d_j \notin D_{S}} \mathds{1}(P(d_i | S) > P(d_j | S))\]
 where $D_{S}^{c}$ is the complement of $D_{S}$ and $\mathds{1}$ is the indicator function.
 
@@ -79,9 +79,9 @@ Let $S_i$ and $S_j$ be different sequence sets such that $D_{S_i} = D_{S_j}$ and
 
 \[R_{d}(P(d \in D_{S_i} | S_i)) = R_{d}(P(d \in D_{S_i} | S_j))\]
 
-A way to measure this attribute would be to calculate the average Spearman's rank correlation of the rankings for all sequence sets' correct descriptions: 
+A way to measure this attribute would be to calculate the average Spearman's rank correlation of the rankings for all sequence sets' correct descriptions. Let $R_{S_i} = R(P(D_{S_i} | S_i))$:
 
-\[\frac{1}{N*(N-1)}\sum_{S_i, S_j} \frac{\textnormal{cov}(R(P(D_{S_i} | S_i)), R(P(D_{S_i} | S_j))}{\sigma_{P(D_{S_i} | S_i))}\sigma_{P(D_{S_i} | S_j))}}\]
+\[\frac{1}{N*(N-1)}\sum_{S_i, S_j} \frac{\textnormal{cov}(R_{S_i}, R_{S_j})}{\sigma_{R_{S_i}}\sigma_{R_{S_j}}}\]
 
 where $N$ is the total number of sequence sets that have the exact set of GO descriptions $D_{S_i}$. In reality, this number may be too large to actually sum (especially if $|D_{S_i}|$ is small), so we would approximate this measure by subsampling $n < N$ sequence sets to average over instead. The sum is only calculated over non-identical pairs of sequence sets.
 
@@ -93,14 +93,14 @@ where $N$ is the total number of sequence sets that have the exact set of GO des
 %
 %\[P(d \in D_{S_i} | S_i) = P(d \in D_{S_i} | S_j)\]
 %
-%A way to measure this attribute would be to calculate the ratio of the probabilities, using the difference of the log probabilities: 
+%A way to measure this attribute would be to calculate the ratio of the probabilities, using the difference of the log probabilities:
 %
 %\[\frac{1}{N*(N-1)*|D_{S_i}|}\sum_{S_i, S_j, d_{k} \in D_{S_i}} |\log P(d_k | S_i) - \log P(d_k | S_j)|\]
 
 %where $N$ is the total number of sequence sets that have the exact set of GO descriptions $D_{S_i}$. In reality, this number may be too large to actually sum (especially if $|D_{S_i}|$ is small), so we would approximate this measure by subsampling $n < N$ sequence sets to average over instead. The sum is only calculated over non-identical pairs of sequence sets.
 %\attribute*
- 
-%Commonality 
+
+%Commonality
 %
 %Having a sequence in the set with a sequence that has no annotations in common with the rest of the set besides the root terms should change the scores to score only the root terms highly.
 %
@@ -117,9 +117,8 @@ As these scoring metrics for evaluation are automated, they can be used for opti
 
 One possible way of obtaining human feedback would be to ask an expert with knowledge of the Gene Ontology and familiarity with some families of proteins to choose between two descriptions for a given sequence set that is generated from a trained model.
 
-Doing this over a large enough dataset would allow us to train a reward estimation model that can then be used to fine-tune the original trained model using reinforcement learning. However, this would be expensive, as the task needs to be done by an expert.
+Doing this over a large enough dataset would allow us to train a reward estimation model that can then be used to fine-tune the original trained model using reinforcement learning. However, this would be expensive, as the task needs to be done by an expert. Richer information, like ranking the similarities to an existing GO term or suggesting changes to particular portions of the description could be used to get feedback.
 
 \printbibliography
 
 \end{document}
-
