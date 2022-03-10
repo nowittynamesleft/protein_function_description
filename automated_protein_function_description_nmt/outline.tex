@@ -14,12 +14,12 @@
 \maketitle
 
 \section{Abstract}
-High-throughput sequencing technologies have allowed us to amass millions of protein sequences from organisms throughout the tree of life. 
+High-throughput sequencing technologies have allowed us to amass millions of protein sequences from organisms throughout the tree of life.
 Protein function prediction, as it is framed in the case of Gene Ontology term prediction, is a multilabel problem with a hierarchical label space.
 However, this framing is limiting as it does not provide guiding principles for discovering completely novel functions.
 Clustering-based approaches are not able to give much information about the new functional categories that they predict; they can only predict that a protein may belong to a category that has not been studied.
 In this work we propose a neural machine translation model in order to generate descriptions of protein functions in natural language.
-We provide quantitative results of our model in the zero-shot classification setting, scoring functional descriptions that the model has not seen before, as well as function descriptions for qualitative evaluation. 
+We provide quantitative results of our model in the zero-shot classification setting, scoring functional descriptions that the model has not seen before, as well as function descriptions for qualitative evaluation.
 
 \section{Introduction}
 
@@ -39,7 +39,7 @@ However, this may not sufficiently describe the new function, and it also exclud
 Many methods have been proposed for protein function prediction, though most do not consider the problem of discovering novel functions.
 Instead, the task is generally framed as a supervised multilabel problem where the predicted labels are all assumed to have some example in the training set.
 Yet most unlabeled proteins, especially in understudied organisms, are likely to perform functions that have not yet been characterized.
-The supervised approach does not address this possibility, and so new methods must be proposed for function discovery. 
+The supervised approach does not address this possibility, and so new methods must be proposed for function discovery.
 
 Clustering-based approaches are not able to give much information about the new functional categories that they predict.
 They can only predict that a protein may belong to a category that has not been studied.
@@ -51,7 +51,7 @@ DeepGOZero \cite{DeepGOZero} is a method that uses ontology axioms to predict fo
 However, the classes that are able to be predicted must be defined with ontological relations to seen classes.
 This constraint both restricts the possible novel functions that can be discovered and may not give sufficient information to design an experiment to test for the novel function.
 Among the few zero-shot approaches proposed for function prediction, none are able to describe the novel functions discovered in natural language.
- 
+
 \subsection{Neural machine translation}
 
 \section{Methods}
@@ -62,14 +62,13 @@ Among the few zero-shot approaches proposed for function prediction, none are ab
 The model is trained to produce the most specific common function of the input protein sequences.}
     \label{overview}
 \end{figure}
-\begin{enumerate}
-    \item Transformer encoder-decoder model
-    \item Length transform
-    \item Zero-shot Classification setting
-    \item Generation (beam search)
-\end{enumerate}
+    \subsection{Transformer encoder-decoder model}
+    We use a transformer encoder-decoder model \cite{vaswani2017} with a length transform \cite{Shu2019} to handle differing sequence lengths in order to average sequence features from the encoder.
+    \subsection{Length transform}
+    \subsection{Zero-shot Classification setting}
+    \subsection{Generation (beam search)}
 \section{Evaluation}
-In this section, we define three metrics that can be computed using known functional descriptions in order to evaluate our models' learned probability distributions. 
+In this section, we define three metrics that can be computed using known functional descriptions in order to evaluate our models' learned probability distributions.
 
 Generated descriptions are shown in the Results section for qualitative analysis.
 Quantitative analysis of the generated descriptions requires data from human evaluators with expertise in protein function in order to determine the accuracy of generated descriptions.
@@ -120,7 +119,7 @@ The sum is only calculated over non-identical pairs of sequence sets.
     \item Plots of the models with the three metrics.
 Training proteins with training GO terms, test proteins with training GO terms, and test proteins with test GO terms.
     \item Analysis of what differences the models have in terms of architecture or training, and how that relates to the difference in performances across the three measures.
-    \item Table of randomly selected generated descriptions of protein sets that have GO terms not in the training set for each model. 
+    \item Table of randomly selected generated descriptions of protein sets that have GO terms not in the training set for each model.
     \item Perhaps some analysis of the model's performance with respect to point anomalies, contextual anomalies, group anomalies? Would likely need to create specific datasets for these tests
 \end{enumerate}
 
