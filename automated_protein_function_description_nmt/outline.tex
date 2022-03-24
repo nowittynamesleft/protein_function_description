@@ -3,6 +3,8 @@
 \usepackage{dsfont}
 \usepackage{graphicx}
 \usepackage{epstopdf}
+\usepackage{booktabs}
+\usepackage{csquotes}
 \bibliography{bibliography}
 
 
@@ -63,8 +65,9 @@ The model is trained to produce the most specific common function of the input p
     \label{overview}
 \end{figure}
     \subsection{Transformer encoder-decoder model}
-    We use a transformer encoder-decoder model \cite{vaswani2017} with a length transform \cite{Shu2019} to handle differing sequence lengths in order to average sequence features from the encoder.
+    We use a transformer encoder-decoder model \cite{vaswani2017attention} with a length transform \cite{shu2020latent} to handle differing sequence lengths in order to average sequence features from the encoder.
     \subsection{Length transform}
+    The model takes sequences of varying length. The sequence features as they are produced by the model are not able to be pooled without losing information.
     \subsection{Zero-shot Classification setting}
     \subsection{Generation (beam search)}
 \section{Evaluation}
@@ -118,10 +121,44 @@ The sum is only calculated over non-identical pairs of sequence sets.
 \begin{enumerate}
     \item Plots of the models with the three metrics.
 Training proteins with training GO terms, test proteins with training GO terms, and test proteins with test GO terms.
-    \item Analysis of what differences the models have in terms of architecture or training, and how that relates to the difference in performances across the three measures.
+    \item Analysis of what differences the models have in terms of architecture or training, and how that relates to the difference in performances across the three measures and the three settings of function prediction:
+        \begin{enumerate}
+            \item Train set proteins/functions
+            \item Proteins part of test set but with train set functions
+            \item Proteins part of test set with test set functions
+        \end{enumerate}
     \item Table of randomly selected generated descriptions of protein sets that have GO terms not in the training set for each model.
     \item Perhaps some analysis of the model's performance with respect to point anomalies, contextual anomalies, group anomalies? Would likely need to create specific datasets for these tests
+\begin{table}
+	\caption{Model Performances}
+	\centering
+	\begin{tabular}{l|ll111}
+		\toprule
+        Metric & Train P\&F & Train P, Test F & Test P, Train F & Test P\&F \\
+		\midrule
+        Annotation Correctness & 0.7 & 0.4 & 0.6 & 0.4\\
+        Specificity Preference & 0.4 & 0.4 & 0.3 & 0.4 \\
+		Annotation Robustness & 0.05 & 0.2 & 0.3 & 0.4 \\
+		\bottomrule
+	\end{tabular}
+	\label{tab:table}
+\end{table}
+\begin{table}
+	\caption{Description Generation}
+	\centering
+    \begin{tabular}{p{7.5 cm}|p{7.5 cm}}
+		\toprule
+        True GO Description & Generated Description \\
+		\midrule
+        binding to fructose 6-phosphate . & catalysis of the reaction sinapaldehyde + nadph = nadp+ = h+ . \\ \hline
+        catalysis of the reaction n6- ( 1 , 2-dicarboxyethyl ) amp = fumarate + amp . & catalysis of the reaction 2-deoxy-d-ribose 5-phosphate = d-glyceraldehyde 3-phosphate + acetaldehyde + acetaldehyde + acetaldehyde ... \\ \hline
+		the chemical reactions and pathways involving of salicylic acid ( 2-hydroxybenzoic acid ) , a derivative of benzoic acid . & the chemical reactions and pathways resulting in the formation of asparagine , the fundamental heterocyclic group of asparagine , from simpler precursors , the formation of the formation of the formation of the formation of the multisubunit water-soluble proteins , the formation of the multisubunit water-soluble proteins , the multisubunit water-soluble proteins , the multisubunit water-soluble proteins , the formation of the formation of the formation ... \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
 \end{enumerate}
+
 
 \section{Discussion}
 In this work, we have proposed a novel method to generate protein function descriptions in order to discover new protein functions.
