@@ -28,6 +28,8 @@ We provide quantitative results of our model in the zero-shot classification set
     \subsection{Motivation}
     Why make a model that describes the common functions of a set of proteins in natural language?
     \begin{enumerate}
+        \item Why use sets of proteins? We describe protein function as abstractions of what we know groups of proteins to do. This is a more general way of framing the problem that matches the way the GO terms themselves were created.
+        \item Why use natural language? We want to be able to describe proteins in a compositional way, so that we have the ability to describe any set of proteins given to the model. This gives us an ability to describe functions that have not been characterized already for free, rather than having to train a new model or rely on specific examples of that function.
         \item We want to be able to predict the functions of proteins, but we are limited by the amount of data that we have in both the amount of well characterized proteins and also the variety of known functions.
         \item Even the best supervised approaches can only take us to the point where we can annotate proteins that have functions that have been seen before.
         \item Explicitly ontology-based zero-shot approaches such as DeepGOZero \cite{DeepGOZero} do not allow for actual description of a new function that is discovered.
@@ -64,12 +66,19 @@ Among the few zero-shot approaches proposed for function prediction, none are ab
 The model is trained to produce the most specific common function of the input protein sequences.}
     \label{overview}
 \end{figure}
+    \subsection{Permutation invariance of protein sets to describe}
+    We begin describing our method with the way we construct our input. We use sets of protein sequences, invariant to ordering, as input to the model giving a description. In this way, we are making the problem more general: our task is to describe the function of a set of any number of proteins. This matches the manual process of characterizing new functions. Biologists describe and categorize functions which are abstractions of the common behavior of groups of proteins in nature, so we want our model to be able to perform this abstraction given any set of proteins.
+    \subsection{Autoregressive generation of descriptions}
+    Another contribution we make in proposing this method is to generate protein function descriptions in natural language. This allows for the characterization of proteins in a compositional way, with a grammar such that all protein sets can be described with the model, not just those with particular sets of terms the scientific community has manually assigned with the Gene Ontology.
     \subsection{Transformer encoder-decoder model}
     We use a transformer encoder-decoder model \cite{vaswani2017attention} with a length transform \cite{shu2020latent} to handle differing sequence lengths in order to average sequence features from the encoder.
     \subsection{Length transform}
     The model takes sequences of varying length. The sequence features as they are produced by the model are not able to be pooled without losing information.
     \subsection{Zero-shot Classification setting}
+    Fundamentally, our model assigns probabilities to pairs of protein sets and descriptions. In order to evaluate the method, we use the zero-shot classification setting, where we wish to classify proteins into unseen categories. We develop three metrics in the Evaluation section to evaluate the distribution learned by the model in this classification setting.
+
     \subsection{Generation (beam search)}
+    Generation of descriptions is a search problem through the set of all possible output token sequences, where the goal is to find the sequence with the largest probability. Generation given an autoregressive model is a highly studied problem in the natural language processing literature. We use beam search in the current implementation in order to find reasonable generated descriptions. Evaluation of these descriptions is an unsolved problem; currently, manual inspection by expert human evaluators is the best method we have.
 \section{Evaluation}
 In this section, we define three metrics that can be computed using known functional descriptions in order to evaluate our models' learned probability distributions.
 
