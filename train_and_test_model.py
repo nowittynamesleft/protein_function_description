@@ -7,6 +7,7 @@ from pytorch_lightning import Trainer, Callback
 from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.plugins import DDPPlugin # for find_unused_parameters=False; this is True by default which gives a performance hit, and according to documentation
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from pytorch_lightning.callbacks import ModelCheckpoint
 import argparse
 import numpy as np
 import pickle
@@ -246,16 +247,17 @@ def classification(model, dataset, save_prefix='no_prefix', num_subsamples=10):
     ground_truth = []
     print("Num subsamples per term:" + str(num_subsamples))
     for ind in tqdm.tqdm(included_go_inds):
-        (prot_id_sets, seq_sets) = zip(*[dataset[ind] for it in range(num_subsamples)])
-        valid_terms = [dataset.get_all_valid_term_inds(prot_id_set) for prot_id_set in prot_id_sets]
-        ground_truth.extend(valid_terms)
+        #(prot_id_sets, seq_sets) = zip(*[dataset[ind] for it in range(num_subsamples)])
+        (prot_id_sets, seq_sets) = dataset.get_identically_annotated_subsamples(ind, num_subsamples)
+        valid_term_mask = [dataset.get_all_valid_term_mask(prot_id_set) for prot_id_set in prot_id_sets]
+        ground_truth.extend(valid_term_mask)
         S_padded, S_mask = seq_go_collate_pad(list(zip(prot_id_sets, seq_sets)), seq_set_size=len(seq_sets[0])) # batch sizes of 1 each, index out of it
         seq_set_desc_probs, seq_set_desc_token_probs = model.classify_seq_sets(S_padded, S_mask, GO_padded, GO_pad_masks, len_penalty=True) 
         preds.append(seq_set_desc_probs)
         all_pred_token_probs.append(seq_set_desc_token_probs)
 
     preds = torch.cat(preds)
-    pred_outdict = {'seq_set_go_term_inds': ground_truth, 'all_term_preds': preds, 'all_term_token_probs': all_pred_token_probs, 'go_descriptions': np.array(dataset.go_descriptions)}
+    pred_outdict = {'seq_set_go_term_mask': ground_truth, 'all_term_preds': preds, 'all_term_token_probs': all_pred_token_probs, 'go_descriptions': np.array(dataset.go_descriptions)}
     pickle.dump(pred_outdict, open(save_prefix + '_pred_dict.pckl', 'wb'))
     print("Mean reciprocal rank")
     mrr = mean_reciprocal_rank(preds, ground_truth)
@@ -270,7 +272,7 @@ def classification(model, dataset, save_prefix='no_prefix', num_subsamples=10):
         print('Len penalty: Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs))
     '''
 
-    return preds, accs
+    return preds
     
 
 def mean_reciprocal_rank(preds, ground_truth):
@@ -331,13 +333,15 @@ if __name__ == '__main__':
     csv_logger = CSVLogger('lightning_logs', name=(args.save_prefix + '_experiment'))
     no_early_stopping = args.no_early_stopping
     no_val_loss = args.no_val_loss
+    model_checkpoint_callback = ModelCheckpoint(monitor='val_loss', every_n_epochs=1, save_top_k=-1) # save model checkpoint after every epoch
     
     if no_early_stopping:
         trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs, 
+                callbacks=[model_checkpoint_callback],
                 logger=csv_logger)
     else:
         trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs,  # mixed precision causes nan loss, so back to regular precision.
-            callbacks=[early_stopping_callback], logger=csv_logger)
+            callbacks=[model_checkpoint_callback, early_stopping_callback], logger=csv_logger)
 
     if args.load_model_predict is None:
         if args.load_model is not None:
@@ -347,7 +351,7 @@ if __name__ == '__main__':
             model.to('cuda:0')
             if args.classify:
                 print('Classfication before training:')
-                preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix)
+                preds = classification(model, test_dataset, save_prefix=args.save_prefix)
         train_dl = DataLoader(x, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=0, pin_memory=True)
         print('Validation loss:')
         trainer.validate(model, test_dl)
@@ -371,10 +375,10 @@ if __name__ == '__main__':
         print('Classfication after whole script:')
         model.to('cuda:0')
         with torch.no_grad():
-            preds, acc = classification(model, test_dataset, save_prefix=args.save_prefix, num_subsamples=4)
+            preds = classification(model, test_dataset, save_prefix=args.save_prefix, num_subsamples=4)
     if args.generate:
         print('Generation after whole script:')
         if model.pred_pair_probs:
             model.pred_pair_probs = False
         sentences = trainer.predict(model, test_dl)
-
+    

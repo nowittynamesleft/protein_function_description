@@ -69,17 +69,22 @@ def compute_global_average_properties(pred_dict, dataset, k=10):
     print('Correlation between relevant reciprocal rank and depth of term')
     print(corr_depth)
 
+def attribute_calculation(prob_mat, correct_go_mask, n):
+    correctness = annotation_correctness(prob_mat, correct_go_mask)
+    print('Annotation correctness: ' + str(correctness))
+    sp = specificity_preference(prob_mat, correct_go_mask, x.adj_mat)
+    print('Specificity preference: ' + str(sp))
+    robustness_score = annotation_robustness(prob_mat, n, correct_go_mask)
+    print('Annotation robustness (avg. spearman correlation between rankings. [-1, 1]): ' + str(robustness_score))
 
 if __name__ == '__main__':
     pred_dict = pickle.load(open(sys.argv[1],'rb'))
     x = SequenceGOCSVDataset(sys.argv[2], 'go.obo', 32)
     #compute_global_average_properties(pred_dict, x, k=10)
     prob_mat = pred_dict['all_term_preds']
-    correct_go_inds = pred_dict['seq_set_go_term_inds']
+    try:
+        correct_go_mask = pred_dict['seq_set_go_term_mask']
+    except KeyError:
+        correct_go_mask = pred_dict['seq_set_go_term_inds']
     n = 4
-    correctness = annotation_correctness(prob_mat, correct_go_inds)
-    print('Annotation correctness: ' + str(correctness))
-    robustness_score = annotation_robustness(prob_mat, 4, correct_go_inds)
-    print('Annotation robustness (avg. spearman correlation between rankings. [-1, 1]): ' + str(robustness_score))
-    specificity_preference = specificity_preference(prob_mat, correct_go_inds, x.adj_mat)
-    print('Specificity preference: ' + str(specificity_preference))
+    attribute_calculation(prob_mat, correct_go_mask, n)
