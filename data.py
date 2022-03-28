@@ -427,10 +427,16 @@ def test_identical_subsampling(test_csv, num_sets, seq_set_len):
             pass
     rejection_rate /= (len(dataset.go_terms) - num_excluded_terms)
     print('Rejection rate (average): ' + str(rejection_rate))
-    avg_num_common_terms = sum([len(term_list) for term_list in common_terms_lists])/len(common_terms_lists)
+    num_terms_list = [len(term_list) for term_list in common_terms_lists]
+    num_multiterm_selections = 0
+    for num_terms in num_terms_list:
+        if num_terms > 1:
+            num_multiterm_selections += 1
+    avg_num_common_terms = sum(num_terms_list)/len(common_terms_lists)
     print('Average number of common terms: ' + str(avg_num_common_terms))
-    #import ipdb; ipdb.set_trace()
+    print('Number of common terms greater than 1: ' + str(num_multiterm_selections))
+    import ipdb; ipdb.set_trace()
     
 
 if __name__ == '__main__':
-    test_identical_subsampling('uniprot_sprot_training_val_split.csv', 2, 16)
+    test_identical_subsampling('uniprot_sprot_training_val_split.csv', 4, 16)

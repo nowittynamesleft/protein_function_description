@@ -237,7 +237,6 @@ def single_prot_description(model, annot_seq_file, loaded_vocab, save_prefix, nu
 
 def classification(model, dataset, save_prefix='no_prefix', num_subsamples=10):
     # extract each seq set, compute all pairs of probabilities
-    #import ipdb; ipdb.set_trace()
     GO_padded, GO_pad_masks = dataset.get_padded_descs()
     dataset.set_include_go_mode(False)
     included_go_inds = np.arange(len(dataset))
@@ -373,5 +372,6 @@ if __name__ == '__main__':
         print('Generation after whole script:')
         if model.pred_pair_probs:
             model.pred_pair_probs = False
-        sentences = trainer.predict(model, test_dl)
-    
+        predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset, args.save_prefix)
+
+         

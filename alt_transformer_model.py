@@ -363,7 +363,8 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             
             if len(pred_batch) == 4: # if the actual description was supplied in the batch to compare
                 print('Actual description:')
-                print(' '.join(self.convert_sample_preds_to_words(actual_GO_padded[seq_set_ind][~actual_GO_pad_mask[seq_set_ind]])))
+                actual_description = ' '.join(self.convert_sample_preds_to_words(actual_GO_padded[seq_set_ind][~actual_GO_pad_mask[seq_set_ind]]))
+                print(actual_description)
         return all_final_candidate_sentences, all_final_candidate_probs
 
 
