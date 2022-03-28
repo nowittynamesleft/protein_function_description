@@ -148,17 +148,11 @@ class SequenceGOCSVDataset(Dataset):
         union_go_term_mask = np.any(self.go_annot_mat[annot_inds], axis=0)
         return union_go_term_mask
 
-    '''
-    def get_all_valid_terms(self, prot_ids):
-        valid_term_inds = self.check_prot_set_annots(prot_ids)
-        valid_go_terms = self.go_terms[valid_term_inds]
-        if len(valid_go_terms) > 1:
-            print('More than one valid go term ind!')
-            print(valid_go_terms)
-
-        return valid_go_terms
-    '''
     def get_identically_annotated_subsamples(self, go_term_index, num_sets):
+        try:
+            assert num_sets > 1
+        except AssertionError:
+            print('num_sets to subsample must be greater than 1.')
         # get multiple subsets of proteins that have the same GO terms in common within each set of proteins, given a single go term that you want the sets to have
         annotated_seqs = self.get_annotated_seqs(go_term_index)[0]
         annotated_prot_ids = self.get_annotated_prot_ids(go_term_index)[0] # only consider proteins containing the go term specified
@@ -181,8 +175,8 @@ class SequenceGOCSVDataset(Dataset):
             counter += 1
             if counter > 1000:
                 import ipdb; ipdb.set_trace()
-        print('Number of tries to get an appropriate protein set to choose ' + str(num_sets) + ':' + str(counter))
-        print(common_terms)
+        #print('Number of tries to get an appropriate protein set to choose ' + str(num_sets) + ':' + str(counter))
+        #print(common_terms)
         '''
         # once there are enough protein sets to possibly sample, check what other terms the proteins have
         all_term_mask = self.get_union_of_terms(prots_with_terms)
@@ -244,12 +238,12 @@ class SequenceGOCSVDataset(Dataset):
             print('Not all sets chosen have common terms chosen!')
             import ipdb; ipdb.set_trace()
 
-        print('Length of protein sets chosen:')
-        print([len(prot_set) for prot_set in prot_id_sets])
-        print('Rejected sampled sets: ' + str(rejected))
-        print('Total tries: ' + str(total_tries))
-        print('Rejection rate:')
-        print(rejected/total_tries)
+        #print('Length of protein sets chosen:')
+        #print([len(prot_set) for prot_set in prot_id_sets])
+        #print('Rejected sampled sets: ' + str(rejected))
+        #print('Total tries: ' + str(total_tries))
+        #print('Rejection rate:')
+        #print(rejected/total_tries)
         
         return (prot_id_sets, seq_sets, common_terms, rejected, total_tries)
         
@@ -417,24 +411,26 @@ def create_annot_mat(prot_ids, go_terms, go2prot_ids):
     return annot_mat, prot_id2annot_ind
 
 
-def test_identical_subsampling(test_csv):
-    dataset = SequenceGOCSVDataset(test_csv, 'go.obo', 1)
+def test_identical_subsampling(test_csv, num_sets, seq_set_len):
+    dataset = SequenceGOCSVDataset(test_csv, 'go.obo', seq_set_len)
     print('loaded dataset')
-    num_sets = 2 # do I need a num_sets parameter as long as I have at least two sets to compute the metric?? I can always increase the number of sets for a given GO term instead I guess...
     rejection_rate = 0
     num_excluded_terms = 0
+    common_terms_lists = []
     for term in tqdm.tqdm(range(0, len(dataset.go_terms))):
         try:
             (prot_id_sets, seq_sets, common_terms, rejected, total_tries) = dataset.get_identically_annotated_subsamples(term, num_sets)
             rejection_rate += rejected/total_tries
+            common_terms_lists.append(common_terms)
         except AssertionError:
             num_excluded_terms += 1
             pass
     rejection_rate /= (len(dataset.go_terms) - num_excluded_terms)
     print('Rejection rate (average): ' + str(rejection_rate))
+    avg_num_common_terms = sum([len(term_list) for term_list in common_terms_lists])/len(common_terms_lists)
+    print('Average number of common terms: ' + str(avg_num_common_terms))
     #import ipdb; ipdb.set_trace()
     
 
 if __name__ == '__main__':
-    #test_identical_subsampling('first_100_uniprot_training_annot.csv')
-    test_identical_subsampling('uniprot_sprot_training_val_split.csv')
+    test_identical_subsampling('uniprot_sprot_training_val_split.csv', 2, 16)

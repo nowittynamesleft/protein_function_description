@@ -246,9 +246,10 @@ def classification(model, dataset, save_prefix='no_prefix', num_subsamples=10):
     print(str(len(included_go_inds)) + "-way zero-shot classification.")
     ground_truth = []
     print("Num subsamples per term:" + str(num_subsamples))
+    print('Getting identically annotated subsamples for robustness calculation.')
     for ind in tqdm.tqdm(included_go_inds):
         #(prot_id_sets, seq_sets) = zip(*[dataset[ind] for it in range(num_subsamples)])
-        (prot_id_sets, seq_sets) = dataset.get_identically_annotated_subsamples(ind, num_subsamples)
+        (prot_id_sets, seq_sets, _, _, _) = dataset.get_identically_annotated_subsamples(ind, num_subsamples)
         valid_term_mask = [dataset.get_all_valid_term_mask(prot_id_set) for prot_id_set in prot_id_sets]
         ground_truth.extend(valid_term_mask)
         S_padded, S_mask = seq_go_collate_pad(list(zip(prot_id_sets, seq_sets)), seq_set_size=len(seq_sets[0])) # batch sizes of 1 each, index out of it
@@ -262,18 +263,10 @@ def classification(model, dataset, save_prefix='no_prefix', num_subsamples=10):
     print("Mean reciprocal rank")
     mrr = mean_reciprocal_rank(preds, ground_truth)
     print(mrr)
-    
-    '''
-    if preds.shape[1] < 1000:
-        accs = accuracy(preds, ground_truth, topk=(5, 4, 3, 2, 1))
-        print('Len penalty: Top 5, 4, 3, 2, 1 accuracies: ' + str(accs))
-    else:
-        accs = accuracy(preds, ground_truth, topk=(1000, 500, 100, 50, 10, 5, 1))
-        print('Len penalty: Top 1000, 500, 100, 50, 10, 5, 1 accuracies: ' + str(accs))
-    '''
 
     return preds
     
+
 
 def mean_reciprocal_rank(preds, ground_truth):
     rankings = torch.argsort(torch.sort(preds, dim=1, descending=True)[1], dim=1) + 1

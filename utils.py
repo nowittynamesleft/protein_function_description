@@ -298,6 +298,7 @@ def annotation_robustness(log_prob_mat, n, correct_go_inds):
     assert all_subsamples_have_same_annots(torch.stack([torch.tensor(row) for row in correct_go_inds]), n)
     all_corr = 0
     num_go_term_sets = int(log_prob_mat.shape[0]/n)
+    num_included_terms = 0
     for go_term_set_ind in range(num_go_term_sets):
         rows = log_prob_mat[go_term_set_ind*n:go_term_set_ind*n + n, :]
         correct_mask = torch.zeros_like(rows[0, :], dtype=bool)
@@ -316,7 +317,8 @@ def annotation_robustness(log_prob_mat, n, correct_go_inds):
                         total_correlation += spearman_correlation(score_vec, score_vec_2)
             curr_avg_corr = total_correlation/(n*(n-1))
             all_corr += curr_avg_corr
-    all_corr /= num_go_term_sets
+            num_included_terms += 1
+    all_corr /= num_included_terms
     return all_corr
 
 
