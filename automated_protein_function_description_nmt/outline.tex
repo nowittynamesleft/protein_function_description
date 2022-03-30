@@ -16,9 +16,12 @@
 \maketitle
 
 \section{Abstract}
-High-throughput sequencing technologies have allowed us to amass millions of protein sequences from organisms throughout the tree of life.
+%High-throughput sequencing technologies have allowed us to amass millions of protein sequences from organisms throughout the tree of life.
+Knowledge of protein function is necessary for understanding biological systems, but functional characterization is far outpaced by the discovery of new sequences from high-throughput sequencing technologies.
+Beyond the difficulty of assigning newly sequenced proteins to known functions, a more challenging issue is discovering novel protein functions.
+The space of possible functions becomes unlimited when considering designed proteins.
 Protein function prediction, as it is framed in the case of Gene Ontology term prediction, is a multilabel problem with a hierarchical label space.
-However, this framing is limiting as it does not provide guiding principles for discovering completely novel functions.
+However, this framing is limiting. It does not provide guiding principles for discovering completely novel functions.
 Clustering-based approaches are not able to give much information about the new functional categories that they predict; they can only predict that a protein may belong to a category that has not been studied.
 In this work we propose a neural machine translation model in order to generate descriptions of protein functions in natural language.
 We provide quantitative results of our model in the zero-shot classification setting, scoring functional descriptions that the model has not seen before, as well as function descriptions for qualitative evaluation.
