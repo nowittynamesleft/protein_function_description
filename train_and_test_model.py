@@ -72,12 +72,10 @@ class MetricsCallback(Callback):
         self.metrics['val_loss'].append(trainer.logged_metrics['val_loss_epoch'])
 
 def convert_preds_to_words(predictions, vocab):
-    # converts all predictions in a set of batches to words in a num_batches-length list of batch_size-length lists of sentence-length lists of strings
+    # converts list of prediction tensors to a list of the predictions in words 
     word_preds = []
-    for batch in predictions:
-        word_preds.append([])
-        for sample in batch:
-            word_preds[-1].append([vocab[ind] for ind in sample])
+    for sample in predictions:
+        word_preds.append([vocab[ind] for ind in sample])
     return word_preds
 
 
@@ -170,16 +168,16 @@ def predict_all_prots_of_go_term(trainer, model, num_pred_terms, save_prefix, da
 def predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset, save_prefix):
     pred_output = trainer.predict(model, test_dl)
     
-    preds = [pred for batch in pred_output for pred in batch[0]]
-    probs = [prob for batch in pred_output for prob in batch[1]]
-    word_preds = convert_sample_preds_to_words(preds, model.vocab)
+    preds = [candidate_preds[0] for batch in pred_output for candidate_preds in batch[0]]
+    probs = [candidate_probs[0] for batch in pred_output for candidate_probs in batch[1]]
+    word_preds = convert_preds_to_words(preds, model.vocab)
     outfile = open(save_prefix + '_subsample_prot_preds.txt', 'w')
-    for pred in range(preds):
-        included_term_ind = included_term_inds[i]
-        outfile.write('GO term: ' + test_dataset.go_terms[included_term_ind] + ': ' + test_dataset.go_names[included_term_ind] + '\n')
-        outfile.write('Predictions:\n')
-        outfile.write(pred)
-        outfile.write('Actual description:\n' + ' '.join(x.go_descriptions[included_term_ind]) + '\n\n')
+    for i in range(len(preds)):
+        outfile.write('GO term: ' + test_dataset.go_terms[i] + ': ' + test_dataset.go_names[i] + '\n')
+        outfile.write('Prediction:\n')
+        outfile.write(' '.join(word_preds[i]) + '\n')
+        outfile.write('Probability score:\t' + str(torch.exp(probs[i]).item()) + '\n')
+        outfile.write('Actual description:\n' + ' '.join(x.go_descriptions[i]) + '\n\n')
     outfile.close()
     
 

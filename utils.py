@@ -6,6 +6,28 @@ import pickle
 from fasta_loader import load_fasta, seq2onehot
 
 
+def micro_AUPR(label, score):
+    """Computing AUPR (micro-averaging)"""
+    label = label.flatten()
+    score = score.flatten()
+
+    order = np.argsort(score)[::-1]
+    label = label[order]
+
+    P = np.count_nonzero(label)
+    # N = len(label) - P
+
+    TP = np.cumsum(label, dtype=float)
+    PP = np.arange(1, len(label)+1, dtype=float)  # python
+
+    x = np.divide(TP, P)  # recall
+    y = np.divide(TP, PP)  # precision
+
+    pr = np.trapz(y, x)
+
+    return pr
+
+
 def count_clusters(softmax_outputs_list):
     total_clusters = set()
     for org_preds in softmax_outputs_list:

@@ -4,15 +4,11 @@ import sys
 from data import SequenceGOCSVDataset
 import torch
 from scipy.stats import pearsonr
-from utils import annotation_correctness, specificity_preference, annotation_robustness
+from utils import annotation_correctness, specificity_preference, annotation_robustness, micro_AUPR
 
 
 #TODO: need to have a function that takes in a model and zero-shot predictions 
 # and returns the logits for the predicted GO terms.
-'''
-def get_word_logits(model, seq_sets, descriptions):
-    for seq_set in seq_sets:
-'''
 
 
 def compute_oversmoothing_logratio(logits, target, non_pad_mask, eos_idx, margin=1e-5):
@@ -69,17 +65,19 @@ def compute_global_average_properties(pred_dict, dataset, k=10):
     print('Correlation between relevant reciprocal rank and depth of term')
     print(corr_depth)
 
-def attribute_calculation(prob_mat, correct_go_mask, n):
+def attribute_calculation(prob_mat, correct_go_mask, n, go_adj_mat):
+    aupr = micro_AUPR(np.stack(correct_go_mask), prob_mat.numpy())
+    print('AUPR: ' + str(aupr))
     correctness = annotation_correctness(prob_mat, correct_go_mask)
     print('Annotation correctness: ' + str(correctness))
-    sp = specificity_preference(prob_mat, correct_go_mask, x.adj_mat)
+    sp = specificity_preference(prob_mat, correct_go_mask, go_adj_mat)
     print('Specificity preference: ' + str(sp))
     robustness_score = annotation_robustness(prob_mat, n, correct_go_mask)
     print('Annotation robustness (avg. spearman correlation between rankings. [-1, 1]): ' + str(robustness_score))
+    return aupr, correctness, sp, robustness_score
 
-if __name__ == '__main__':
-    pred_dict = pickle.load(open(sys.argv[1],'rb'))
-    x = SequenceGOCSVDataset(sys.argv[2], 'go.obo', 32)
+def get_attributes(pred_fname, go_adj_mat):
+    pred_dict = pickle.load(open(pred_fname, 'rb'))
     #compute_global_average_properties(pred_dict, x, k=10)
     prob_mat = pred_dict['all_term_preds']
     try:
@@ -87,4 +85,27 @@ if __name__ == '__main__':
     except KeyError:
         correct_go_mask = pred_dict['seq_set_go_term_inds']
     n = 4
-    attribute_calculation(prob_mat, correct_go_mask, n)
+    return attribute_calculation(prob_mat, correct_go_mask, n, go_adj_mat)
+
+def pred_list_attributes(pred_fnames, go_adj_mat):
+    auprs = []
+    correctness_scores = []
+    sps = []
+    robustness_scores = []
+    for fname in pred_fnames:
+        aupr, correctness, sp, robustness_score = get_attributes(fname, go_adj_mat) 
+        auprs.append(aupr)
+        correctness_scores.append(correctness)
+        sps.append(sp)
+        robustness_scores.append(robustness_score)
+    print(auprs)
+    print(correctness_scores)
+    print(sps)
+    print(robustness_scores)
+
+if __name__ == '__main__':
+    pred_fnames = sys.argv[1:-1]
+    dataset_fname = sys.argv[-1]
+    dataset = SequenceGOCSVDataset(dataset_fname, 'go.obo', 32)
+    go_adj_mat = dataset.adj_mat
+    pred_list_attributes(pred_fnames, go_adj_mat)
