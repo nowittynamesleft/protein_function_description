@@ -36,7 +36,7 @@ class SequenceDataset(Dataset):
 
     def __getitem__(self, prot_ind):
         
-        return ([self.seqs[prot_ind]],) # to work with seq_go_collate_pad function
+        return ([self.prot_list[prot_ind], self.seqs[prot_ind]]) # to work with seq_go_collate_pad function
 
     def __len__(self):
         return len(self.seqs)

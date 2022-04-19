@@ -114,6 +114,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         self.max_desc_len = 100
         self.vocab = vocab
         self.pred_pair_probs = False
+        self.save_hyperparameters()
 
     def convert_batch_preds_to_words(self, batch):
         word_preds = []

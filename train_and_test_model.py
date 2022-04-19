@@ -102,14 +102,16 @@ def get_prot_preds(fasta_file, trainer, model, combined=False):
     seq_dataset = SequenceDataset(fasta_file)
     if not combined:
         # get invididual protein preds
-        dl = DataLoader(seq_dataset, batch_size=32, collate_fn=partial(seq_go_collate_pad, seq_set_size=1), num_workers=dl_workers, pin_memory=True)
-        preds = trainer.predict(model, dl)
+        dl = DataLoader(seq_dataset, batch_size=32, collate_fn=partial(seq_go_collate_pad, seq_set_size=1), pin_memory=True)
+        preds, probs = trainer.predict(model, dl)
     else:
         print('Producing a single combined prediction for all proteins in the following fasta file: ' + fasta_file)
         seqs = seq_dataset.seqs
-        pred_batch = seq_go_collate_pad([(seqs,)], seq_set_size=len(seqs)) # make into a list to make it a "batch" of one
-        preds = model.predict_step(pred_batch, 0)
-    return seq_dataset.prot_list, preds
+        prot_ids = seq_dataset.prot_list
+        S_padded, S_mask = seq_go_collate_pad([(prot_ids, seqs)], seq_set_size=len(seqs)) # make into a list to make it a "batch" of one
+        pred_batch = (S_padded.to(model.device), S_mask.to(model.device))
+        preds, probs = model.predict_step(pred_batch, 0)
+    return seq_dataset.prot_list, preds, probs
 
 
 def get_individual_go_term_dataloaders(dataset, num_to_predict, max_seq_set_size=128):
