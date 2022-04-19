@@ -152,7 +152,7 @@ class SequenceGOCSVDataset(Dataset):
         try:
             assert num_sets > 1
         except AssertionError:
-            print('num_sets to subsample must be greater than 1.')
+            print('Warning: num_sets to subsample must be greater than 1 for robustness calculation to make sense.')
         # get multiple subsets of proteins that have the same GO terms in common within each set of proteins, given a single go term that you want the sets to have
         annotated_seqs = self.get_annotated_seqs(go_term_index)[0]
         annotated_prot_ids = self.get_annotated_prot_ids(go_term_index)[0] # only consider proteins containing the go term specified
@@ -162,7 +162,7 @@ class SequenceGOCSVDataset(Dataset):
             assert len(annotated_prot_ids) > self.num_samples
         except AssertionError:
             print("Term selected does not have enough proteins to subset " + str(num_sets) + " sets. Skipping.")
-            raise AssertionError
+            raise
         counter = 0
         while comb(len(prots_with_terms), self.num_samples) < num_sets: # first choose a set such that there are enough proteins with the terms such that you can actually choose num_sets sets
             # get one protein set with chosen GO term

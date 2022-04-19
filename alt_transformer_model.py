@@ -50,9 +50,10 @@ class LengthConverter(pl.LightningModule):
     Implementation of Length Transformation. From Shu et al 2019
     """
 
-    def __init__(self):
+    def __init__(self, sigma=1.0):
         super(LengthConverter, self).__init__()
-        self.sigma = nn.Parameter(torch.tensor(1., dtype=torch.float), requires_grad=True)
+        #self.sigma = nn.Parameter(torch.tensor(1., dtype=torch.float), requires_grad=True)
+        self.sigma = torch.tensor(sigma, dtype=torch.float, device=self.device)
 
     def forward(self, z, tgt_lengths, z_mask):
         #import ipdb; ipdb.set_trace()
@@ -85,17 +86,15 @@ class LengthConverter(pl.LightningModule):
         z_prime = z_prime * z_prime_mask[:, :, None]
         return z_prime, z_prime_mask
 
-    '''
-    def compute_monotonic_attention(self, input_positions, output_positions, 
-            curr_lengths, tgt_lengths):
-    '''
+    #def compute_monotonic_attention(self, input_positions, output_positions, 
+    #        curr_lengths, tgt_lengths):
         
 
 
 class SeqSet2SeqTransformer(pl.LightningModule):
     def __init__(self, num_encoder_layers: int, num_decoder_layers: int,
                  emb_size: int, src_vocab_size: int, tgt_vocab_size: int,
-                 dim_feedforward:int = 512, num_heads: int = 1, dropout:float = 0.1, vocab=None):
+                 dim_feedforward:int = 512, num_heads: int = 1, sigma:float = 1.0, dropout:float = 0.1, vocab=None):
         super(SeqSet2SeqTransformer, self).__init__()
         encoder_layer = TransformerEncoderLayer(d_model=emb_size, nhead=num_heads,
                                                 dim_feedforward=dim_feedforward, batch_first=True)
@@ -109,8 +108,9 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         self.tgt_tok_emb = TokenEmbedding(tgt_vocab_size, emb_size)
         self.tgt_vocab_size = tgt_vocab_size
         self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout)
+        self.emb_size = emb_size
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=0) # ignore padding in calculating loss; 0 is padding index
-        self.len_convert = LengthConverter()
+        self.len_convert = LengthConverter(sigma=sigma)
         self.max_desc_len = 100
         self.vocab = vocab
         self.pred_pair_probs = False
@@ -121,6 +121,36 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             word_preds.append(self.convert_sample_preds_to_words(sample))
         return word_preds
 
+    def get_probabilities_of_desc_with_no_input(self, tgt, tgt_pad_mask):
+        with torch.no_grad():
+            src_transformed_list = []
+            tgt_in = tgt[:-1].unsqueeze(0)
+            tgt_out = tgt[1:]
+            #tgt_pad_mask_in = tgt_pad_mask[:-1]
+            tgt_pad_mask_out = tgt_pad_mask[1:]
+            tgt_emb = self.positional_encoding(self.tgt_tok_emb(tgt_in)) # only input for getting description representation for decoder
+            tgt_mask = create_target_masks(tgt_in, device=self.device)
+            mem_mask = (torch.zeros((1, 1), dtype=bool)).to(self.device)
+            
+            decoded = self.transformer_decoder(tgt_emb, 
+                    torch.zeros(1, 1, self.emb_size).to(self.device), tgt_mask=tgt_mask, memory_key_padding_mask=mem_mask)
+            #outputs = self.transformer_decoder(tgt_emb, embedding, 
+                    #tgt_mask=tgt_mask, None, GO_pad_mask_input.unsqueeze(0), None) # memory key padding is always assumed to be None, don't need attention mask to hide next description tokens from model
+            logits = self.generator(decoded)
+            #logits = logits.transpose(1,2)
+            #import ipdb; ipdb.set_trace()
+            considered_logits = logits[:, ~tgt_pad_mask_out, :]
+            considered_probs = torch.softmax(considered_logits, -1)
+            considered_log_probs = torch.log(considered_probs)
+
+            correct_tokens = tgt_out[~tgt_pad_mask_out]
+            correct_token_log_probs = torch.stack([considered_log_probs[:, position, correct_tokens[position]] for position in range(correct_tokens.shape[0])])
+            correct_token_log_probs = correct_token_log_probs.transpose(0,1)
+            desc_log_prob = torch.sum(correct_token_log_probs, dim=-1)
+            correct_token_log_probs = correct_token_log_probs.detach().cpu().numpy()
+
+        return desc_log_prob
+        
 
     def convert_sample_preds_to_words(self, sample):
         word_preds = [self.vocab[ind] for ind in sample]

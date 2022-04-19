@@ -285,6 +285,17 @@ def _get_ranks(x: torch.Tensor) -> torch.Tensor:
     ranks[tmp] = torch.arange(len(x))
     return ranks
 
+def get_pairwise_rank_correlations(matrix):
+    sample_inds = np.random.choice(np.arange(matrix.shape[0]), size=100)
+    avg_corr = 0
+    for sample_1_ind in sample_inds:
+        sample_1 = matrix[sample_1_ind, :]
+        for sample_2_ind in sample_inds:
+            sample_2 = matrix[sample_2_ind, :]
+            avg_corr += spearman_correlation(sample_1, sample_2)
+    avg_corr /= sample_inds.shape[0]**2
+    return avg_corr
+
 def spearman_correlation(x: torch.Tensor, y: torch.Tensor):
     """Compute correlation between 2 1-D vectors
     Args:
@@ -316,7 +327,11 @@ def annotation_robustness(log_prob_mat, n, correct_go_inds):
     # where n is the number of subsamples per row
     # each n rows has the same GO terms assigned to them
     # pearson's rank correlation version
-    assert n > 1
+    try:
+        assert n > 1
+    except AssertionError:
+        print('No pairs of subsamples to compute robustness.')
+        return 0
     assert all_subsamples_have_same_annots(torch.stack([torch.tensor(row) for row in correct_go_inds]), n)
     all_corr = 0
     num_go_term_sets = int(log_prob_mat.shape[0]/n)

@@ -15,7 +15,8 @@ from functools import partial
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 import tqdm
-from utils import accuracy, micro_aupr
+from utils import accuracy, micro_aupr 
+from analyze_preds import attribute_calculation
 
 obofile = 'go.obo'
 
@@ -29,6 +30,11 @@ def arguments():
     args.add_argument('--batch_size', type=int, default=1)
     args.add_argument('--seq_set_len', type=int, default=32)
     args.add_argument('--emb_size', type=int, default=256)
+    args.add_argument('--num_encoder_layers', type=int, default=1)
+    args.add_argument('--num_decoder_layers', type=int, default=1)
+    args.add_argument('--num_heads', type=int, default=4)
+    args.add_argument('--sigma', type=float, default=1.0, 
+            help='Fixed sigma parameter for the length transform.')
     args.add_argument('--save_prefix', type=str, default='no_save_prefix')
     args.add_argument('--fasta_fname', type=str)
     args.add_argument('--load_model', type=str, default=None, 
@@ -37,12 +43,16 @@ def arguments():
             help='load model to predict only')
     args.add_argument('--num_pred_terms', type=int, default=-1, 
             help='how many descriptions to predict to compare to real go terms')
+    args.add_argument('--num_subsamples', type=int, default=4, 
+            help='how many times to subsample sets for classification')
     args.add_argument('--test', action='store_true', 
             help='code testing flag, do not save model checkpoints, only train on num_pred_terms GO terms')
     args.add_argument('--classify', action='store_true', 
             help='Classify the test dataset into the available GO terms of the test dataset')
     args.add_argument('--generate', action='store_true', 
             help='Generate descriptions for the test dataset protein sets')
+    args.add_argument('--get_no_input_probs', action='store_true', 
+            help='Get probabilities of GO descriptions in test dataset with no input')
     args.add_argument('--load_vocab', type=str, default=None, 
             help='Load vocab from pickle file instead of assuming all description vocab is included in annot_seq_file')
     args.add_argument('--validate', action='store_true', 
@@ -233,20 +243,27 @@ def single_prot_description(model, annot_seq_file, loaded_vocab, save_prefix, nu
     outfile.close()
 
 
-def classification(model, dataset, save_prefix='no_prefix', num_subsamples=10):
+def classification(model, dataset, save_prefix='no_prefix', num_subsamples=10, id_annotated=True):
     # extract each seq set, compute all pairs of probabilities
     GO_padded, GO_pad_masks = dataset.get_padded_descs()
     dataset.set_include_go_mode(False)
     included_go_inds = np.arange(len(dataset))
     preds = []
     all_pred_token_probs = []
-    print(str(len(included_go_inds)) + "-way zero-shot classification.")
+    print(str(len(included_go_inds)) + "-way zero-shot classification.", flush=True)
     ground_truth = []
-    print("Num subsamples per term:" + str(num_subsamples))
-    print('Getting identically annotated subsamples for robustness calculation.')
+    print("Num subsamples per term:" + str(num_subsamples), flush=True)
+    if id_annotated:
+        print('Getting identically annotated subsamples for robustness calculation.', flush=True)
     for ind in tqdm.tqdm(included_go_inds):
-        #(prot_id_sets, seq_sets) = zip(*[dataset[ind] for it in range(num_subsamples)])
-        (prot_id_sets, seq_sets, _, _, _) = dataset.get_identically_annotated_subsamples(ind, num_subsamples)
+        if id_annotated:
+            try:
+                (prot_id_sets, seq_sets, _, _, _) = dataset.get_identically_annotated_subsamples(ind, num_subsamples)
+            except AssertionError: # not enough proteins for term to sample identically annotated subsamples
+                print('AssertionError hit ' + str(ind))
+                continue
+        else:
+            (prot_id_sets, seq_sets) = zip(*[dataset[ind] for it in range(num_subsamples)])
         valid_term_mask = [dataset.get_all_valid_term_mask(prot_id_set) for prot_id_set in prot_id_sets]
         ground_truth.extend(valid_term_mask)
         S_padded, S_mask = seq_go_collate_pad(list(zip(prot_id_sets, seq_sets)), seq_set_size=len(seq_sets[0])) # batch sizes of 1 each, index out of it
@@ -257,9 +274,16 @@ def classification(model, dataset, save_prefix='no_prefix', num_subsamples=10):
     preds = torch.cat(preds)
     pred_outdict = {'seq_set_go_term_mask': ground_truth, 'all_term_preds': preds, 'all_term_token_probs': all_pred_token_probs, 'go_descriptions': np.array(dataset.go_descriptions)}
     pickle.dump(pred_outdict, open(save_prefix + '_pred_dict.pckl', 'wb'))
-    print("Mean reciprocal rank")
+    print("Mean reciprocal rank", flush=True)
     mrr = mean_reciprocal_rank(preds, ground_truth)
     print(mrr)
+    dataset.set_include_go_mode(True)
+
+    aupr, correctness, sp, robustness_score = attribute_calculation(preds, ground_truth, num_subsamples, dataset.adj_mat)
+    print('AUPR: ' + str(aupr), flush=True)
+    print('correctness: ' + str(correctness), flush=True)
+    print('Specificity preference: ' + str(sp), flush=True)
+    print('Robustness score: ' + str(robustness_score), flush=True)
 
     return preds
     
@@ -309,11 +333,11 @@ if __name__ == '__main__':
         num_pred_terms = len(x)
 
 
-    print('Vocab size:' + str(len(x.vocab)))
+    print('Vocab size:' + str(len(x.vocab)), flush=True)
     collate_fn = x.collate_fn
-    model = SeqSet2SeqTransformer(num_encoder_layers=1, num_decoder_layers=1, 
+    model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
             emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-            dim_feedforward=512, num_heads=4, dropout=0.0, vocab=x.vocab)
+            dim_feedforward=512, num_heads=args.num_heads, sigma=args.sigma, dropout=0.0, vocab=x.vocab)
 
     test_dataset = SequenceGOCSVDataset(args.test_annot_seq_file, obofile, seq_set_len, vocab=x.vocab)
     test_dl = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
@@ -335,41 +359,54 @@ if __name__ == '__main__':
 
     if args.load_model_predict is None:
         if args.load_model is not None:
-            print('Loading model for training: ' + args.load_model)
+            print('Loading model for training: ' + args.load_model, flush=True)
             ckpt = torch.load(args.load_model)
             model.load_state_dict(ckpt['state_dict'])
             model.to('cuda:0')
             if args.classify:
-                print('Classfication before training:')
-                preds = classification(model, test_dataset, save_prefix=args.save_prefix)
+                print('Classfication before training:', flush=True)
+                with torch.no_grad():
+                    preds = classification(model, test_dataset, save_prefix=args.save_prefix)
         train_dl = DataLoader(x, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=0, pin_memory=True)
-        print('Validation loss:')
+        print('Validation loss:', flush=True)
         trainer.validate(model, test_dl)
-        print('Training...')
+        print('Training...', flush=True)
         if no_val_loss:
             trainer.fit(model, train_dl)
         else:
             trainer.fit(model, train_dl, test_dl)
         print('Length convert sigma after training:' + str(model.len_convert.sigma))
     else:
-        print('Loading model for predicting only: ' + args.load_model_predict)
+        print('Loading model for predicting only: ' + args.load_model_predict, flush=True)
         ckpt = torch.load(args.load_model_predict)
         model.load_state_dict(ckpt['state_dict'])
 
     #average_true_desc_prob = predict_all_prots_of_go_term(trainer, model, num_pred_terms, args.save_prefix, x, evaluate_probs=True)
-    print('Length convert sigma:' + str(model.len_convert.sigma))
+    print('Length convert sigma:' + str(model.len_convert.sigma), flush=True)
     model.to('cuda:0')
     if args.validate:
-        trainer.validate(model, test_dl)
+        with torch.no_grad():
+            trainer.validate(model, test_dl)
     if args.classify:
-        print('Classfication after whole script:')
+        print('Classfication after whole script:', flush=True)
         model.to('cuda:0')
         with torch.no_grad():
-            preds = classification(model, test_dataset, save_prefix=args.save_prefix, num_subsamples=4)
+            preds = classification(model, test_dataset, save_prefix=args.save_prefix, num_subsamples=args.num_subsamples, id_annotated=(args.num_subsamples > 1))
     if args.generate:
-        print('Generation after whole script:')
+        print('Generation after whole script:', flush=True)
         if model.pred_pair_probs:
             model.pred_pair_probs = False
         predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset, args.save_prefix)
+    if args.get_no_input_probs:
+        GO_padded, GO_pad_masks = test_dataset.get_padded_descs()
+        desc_scores = []
+        for ind in tqdm.tqdm(range(len(GO_padded))):
+            curr_GO_padded = GO_padded[ind].to(model.device)
+            curr_GO_pad_mask = GO_pad_masks[ind].to(model.device)
+            logit = model.get_probabilities_of_desc_with_no_input(curr_GO_padded, curr_GO_pad_mask)
+            desc_scores.append(logit)
+        desc_scores = torch.cat(desc_scores)
+        out_dict = {'go_descriptions': np.array(test_dataset.go_descriptions), 'desc_scores': desc_scores.cpu()}
+        pickle.dump(out_dict, open(args.save_prefix + '_no_input_desc_probs.pckl', 'wb'))
 
-         
+
