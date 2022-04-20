@@ -22,48 +22,50 @@ obofile = 'go.obo'
 
 
 def arguments():
-    args = argparse.ArgumentParser()
-    #args.add_argument('--learning_rate', type=float, default=0.01)
-    args.add_argument('annot_seq_file', type=str, help='Training annotation dataset')
-    args.add_argument('test_annot_seq_file', type=str, help='Test annotation dataset for validation and prediction')
-    args.add_argument('--epochs', type=int, default=100)
-    args.add_argument('--batch_size', type=int, default=1)
-    args.add_argument('--seq_set_len', type=int, default=32)
-    args.add_argument('--emb_size', type=int, default=256)
-    args.add_argument('--num_encoder_layers', type=int, default=1)
-    args.add_argument('--num_decoder_layers', type=int, default=1)
-    args.add_argument('--num_heads', type=int, default=4)
-    args.add_argument('--sigma', type=float, default=1.0, 
+    parser = argparse.ArgumentParser()
+    #parser.add_argument('--learning_rate', type=float, default=0.01)
+    parser.add_argument('annot_seq_file', type=str, help='Training annotation dataset')
+    parser.add_argument('test_annot_seq_file', type=str, help='Test annotation dataset for validation and prediction')
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--seq_set_len', type=int, default=32)
+    parser.add_argument('--emb_size', type=int, default=256)
+    parser.add_argument('--num_encoder_layers', type=int, default=1)
+    parser.add_argument('--num_decoder_layers', type=int, default=1)
+    parser.add_argument('--num_heads', type=int, default=4)
+    parser.add_argument('--sigma', type=float, default=1.0, 
             help='Fixed sigma parameter for the length transform.')
-    args.add_argument('--save_prefix', type=str, default='no_save_prefix')
-    args.add_argument('--fasta_fname', type=str)
-    args.add_argument('--load_model', type=str, default=None, 
+    parser.add_argument('--save_prefix', type=str, default='no_save_prefix')
+    parser.add_argument('--fasta_fname', type=str)
+    parser.add_argument('--model_to_load', type=str, default=None, 
             help='load model to continue training')
-    args.add_argument('--load_model_predict', type=str, default=None, 
+    parser.add_argument('--load_train', action='store_true', 
+            help='load model to continue training')
+    parser.add_argument('--load_model_predict', action='store_true', 
             help='load model to predict only')
-    args.add_argument('--num_pred_terms', type=int, default=-1, 
+    parser.add_argument('--num_pred_terms', type=int, default=-1, 
             help='how many descriptions to predict to compare to real go terms')
-    args.add_argument('--num_subsamples', type=int, default=4, 
+    parser.add_argument('--num_subsamples', type=int, default=4, 
             help='how many times to subsample sets for classification')
-    args.add_argument('--test', action='store_true', 
+    parser.add_argument('--test', action='store_true', 
             help='code testing flag, do not save model checkpoints, only train on num_pred_terms GO terms')
-    args.add_argument('--classify', action='store_true', 
+    parser.add_argument('--classify', action='store_true', 
             help='Classify the test dataset into the available GO terms of the test dataset')
-    args.add_argument('--generate', action='store_true', 
+    parser.add_argument('--generate', action='store_true', 
             help='Generate descriptions for the test dataset protein sets')
-    args.add_argument('--get_no_input_probs', action='store_true', 
+    parser.add_argument('--get_no_input_probs', action='store_true', 
             help='Get probabilities of GO descriptions in test dataset with no input')
-    args.add_argument('--load_vocab', type=str, default=None, 
+    parser.add_argument('--load_vocab', type=str, default=None, 
             help='Load vocab from pickle file instead of assuming all description vocab is included in annot_seq_file')
-    args.add_argument('--validate', action='store_true', 
+    parser.add_argument('--validate', action='store_true', 
             help='Validate and return loss for test_annot_seq_file')
-    args.add_argument('--no_val_loss', action='store_true', 
+    parser.add_argument('--no_val_loss', action='store_true', 
             help='Validate every epoch')
-    args.add_argument('--no_early_stopping', action='store_true', 
+    parser.add_argument('--no_early_stopping', action='store_true', 
             help='No early stopping; train for the max epochs specified by --epochs')
 
 
-    args = args.parse_args()
+    args = parser.parse_args()
     print(args)
     return args
 
@@ -326,7 +328,6 @@ if __name__ == '__main__':
     else:
         vocab_fname = args.save_prefix + '_vocab.pckl'
         x = SequenceGOCSVDataset(args.annot_seq_file, obofile, seq_set_len, save_prefix=args.save_prefix)
-        pickle.dump(x.vocab, open(vocab_fname, 'wb'))
 
     num_gpus = 1
     dl_workers = 0
@@ -335,11 +336,21 @@ if __name__ == '__main__':
         num_pred_terms = len(x)
 
 
-    print('Vocab size:' + str(len(x.vocab)), flush=True)
     collate_fn = x.collate_fn
-    model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
-            emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-            dim_feedforward=512, num_heads=args.num_heads, sigma=args.sigma, dropout=0.0, vocab=x.vocab)
+    if args.model_to_load is None:
+        print('Vocab size:' + str(len(x.vocab)), flush=True)
+        model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
+                emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
+                dim_feedforward=512, num_heads=args.num_heads, sigma=args.sigma, dropout=0.0, vocab=x.vocab)
+        pickle.dump(x.vocab, open(vocab_fname, 'wb'))
+    else:
+        try:
+            #import ipdb; ipdb.set_trace()
+            model = SeqSet2SeqTransformer.load_from_checkpoint(args.model_to_load).to('cuda:0')
+            old_model_load = False
+        except TypeError: # model wasn't saved with hyperparams (old)
+            old_model_load = True
+            pickle.dump(x.vocab, open(vocab_fname, 'wb'))
 
     test_dataset = SequenceGOCSVDataset(args.test_annot_seq_file, obofile, seq_set_len, vocab=x.vocab)
     test_dl = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
@@ -359,12 +370,16 @@ if __name__ == '__main__':
         trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs,  # mixed precision causes nan loss, so back to regular precision.
             callbacks=[model_checkpoint_callback, early_stopping_callback], logger=csv_logger)
 
-    if args.load_model_predict is None:
-        if args.load_model is not None:
-            print('Loading model for training: ' + args.load_model, flush=True)
-            ckpt = torch.load(args.load_model)
-            model.load_state_dict(ckpt['state_dict'])
-            model.to('cuda:0')
+    if not args.load_model_predict:
+        if args.load_model:
+            print('Loading model for training: ' + args.model_to_load, flush=True)
+            if old_model_load:
+                model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
+                        emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
+                        dim_feedforward=512, num_heads=args.num_heads, sigma=args.sigma, dropout=0.0, vocab=x.vocab)
+                ckpt = torch.load(args.load_model)
+                model.load_state_dict(ckpt['state_dict'])
+                model.to('cuda:0')
             if args.classify:
                 print('Classfication before training:', flush=True)
                 with torch.no_grad():
@@ -379,9 +394,13 @@ if __name__ == '__main__':
             trainer.fit(model, train_dl, test_dl)
         print('Length convert sigma after training:' + str(model.len_convert.sigma))
     else:
-        print('Loading model for predicting only: ' + args.load_model_predict, flush=True)
-        ckpt = torch.load(args.load_model_predict)
-        model.load_state_dict(ckpt['state_dict'])
+        print('Loading model for predicting only: ' + args.model_to_load, flush=True)
+        if old_model_load:
+            model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
+                    emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
+                    dim_feedforward=512, num_heads=args.num_heads, sigma=args.sigma, dropout=0.0, vocab=x.vocab)
+            ckpt = torch.load(args.load_model_predict)
+            model.load_state_dict(ckpt['state_dict'])
 
     #average_true_desc_prob = predict_all_prots_of_go_term(trainer, model, num_pred_terms, args.save_prefix, x, evaluate_probs=True)
     print('Length convert sigma:' + str(model.len_convert.sigma), flush=True)
