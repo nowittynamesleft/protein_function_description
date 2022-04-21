@@ -371,13 +371,13 @@ if __name__ == '__main__':
             callbacks=[model_checkpoint_callback, early_stopping_callback], logger=csv_logger)
 
     if not args.load_model_predict:
-        if args.load_model:
+        if args.load_train:
             print('Loading model for training: ' + args.model_to_load, flush=True)
             if old_model_load:
                 model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
                         emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
                         dim_feedforward=512, num_heads=args.num_heads, sigma=args.sigma, dropout=0.0, vocab=x.vocab)
-                ckpt = torch.load(args.load_model)
+                ckpt = torch.load(args.model_to_load)
                 model.load_state_dict(ckpt['state_dict'])
                 model.to('cuda:0')
             if args.classify:

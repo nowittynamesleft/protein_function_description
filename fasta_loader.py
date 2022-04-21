@@ -7,7 +7,6 @@ from Bio import SeqIO
 use_cuda = torch.cuda.is_available()
 #device = torch.device("cuda:0" if use_cuda else "cpu")
 
-path = '/mnt/ceph/users/dberenberg/Data/cath/'
 CHARS = ['R', 'X', 'S', 'G', 'W', 'I', 'Q', 'A', 'T', 'V', 'K', 'Y', 'C', 'N', 'L', 'F', 'D', 'M', 'P', 'H', 'E', 'U', 'O', 'B', 'Z', '-']
 
 
@@ -22,8 +21,6 @@ def load_fasta(filename):
         entry = entry.split('|')[1]
         domain2seq[entry] = seq
     return domain2seq
-
-domain2seqres = load_fasta(path + 'materials/' + 'cath-dataset-nonredundant-S40.fa')
 
 
 def load_domain_list(filename):
@@ -124,17 +121,3 @@ class Dataset(data.Dataset):
         S = torch.from_numpy(seq2onehot(domain2seqres[ID])).float()
 
         return S
-
-
-if __name__ == "__main__":
-    domains = load_domain_list(path + 'cath-dataset-nonredundant-S40.list')
-    # Parameters
-    params = {'batch_size': 64,
-              'shuffle': True,
-              'collate_fn': collate_padd}
-    training_dataset = Dataset(domains[:1000])
-    training_generator = data.DataLoader(training_dataset, **params)
-
-    # for epoch in range(10):
-    for batch in training_generator:
-        print (torch.diagonal(batch[0][0]))
