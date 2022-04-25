@@ -30,9 +30,11 @@ def arguments():
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--seq_set_len', type=int, default=32)
     parser.add_argument('--emb_size', type=int, default=256)
+    parser.add_argument('--dim_feedforward', type=int, default=512)
     parser.add_argument('--num_encoder_layers', type=int, default=1)
     parser.add_argument('--num_decoder_layers', type=int, default=1)
     parser.add_argument('--num_heads', type=int, default=4)
+    parser.add_argument('--dropout', type=float, default=0.0)
     parser.add_argument('--sigma', type=float, default=1.0, 
             help='Fixed sigma parameter for the length transform.')
     parser.add_argument('--save_prefix', type=str, default='no_save_prefix')
@@ -289,7 +291,7 @@ def classification(model, dataset, save_prefix='no_prefix', num_subsamples=10, i
     print('Specificity preference: ' + str(sp), flush=True)
     print('Robustness score: ' + str(robustness_score), flush=True)
 
-    return preds
+    return ground_truth, preds
     
 
 
@@ -334,14 +336,14 @@ if __name__ == '__main__':
     num_pred_terms = args.num_pred_terms
     if args.num_pred_terms == -1:
         num_pred_terms = len(x)
-
+    
 
     collate_fn = x.collate_fn
     if args.model_to_load is None:
         print('Vocab size:' + str(len(x.vocab)), flush=True)
         model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
                 emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-                dim_feedforward=512, num_heads=args.num_heads, sigma=args.sigma, dropout=0.0, vocab=x.vocab)
+                dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab)
         pickle.dump(x.vocab, open(vocab_fname, 'wb'))
     else:
         try:
@@ -356,11 +358,13 @@ if __name__ == '__main__':
     test_dl = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
 
     #metric_callback = MetricsCallback()
-    early_stopping_callback = EarlyStopping(monitor="val_loss", min_delta=0.00, patience=10)
+    early_stopping_callback = EarlyStopping(monitor="val_loss", min_delta=0.00, patience=20)
     csv_logger = CSVLogger('lightning_logs', name=(args.save_prefix + '_experiment'))
     no_early_stopping = args.no_early_stopping
     no_val_loss = args.no_val_loss
     model_checkpoint_callback = ModelCheckpoint(monitor='val_loss', every_n_epochs=1, save_top_k=-1) # save model checkpoint after every epoch
+    
+    
     
     if no_early_stopping:
         trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs, 
@@ -376,14 +380,14 @@ if __name__ == '__main__':
             if old_model_load:
                 model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
                         emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-                        dim_feedforward=512, num_heads=args.num_heads, sigma=args.sigma, dropout=0.0, vocab=x.vocab)
+                        dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab)
                 ckpt = torch.load(args.model_to_load)
                 model.load_state_dict(ckpt['state_dict'])
                 model.to('cuda:0')
             if args.classify:
                 print('Classfication before training:', flush=True)
                 with torch.no_grad():
-                    preds = classification(model, test_dataset, save_prefix=args.save_prefix)
+                    ground_truth, preds = classification(model, test_dataset, save_prefix='classification_pred_files/' + args.save_prefix, num_subsamples=args.num_subsamples)
         train_dl = DataLoader(x, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=0, pin_memory=True)
         print('Validation loss:', flush=True)
         trainer.validate(model, test_dl)
@@ -398,7 +402,7 @@ if __name__ == '__main__':
         if old_model_load:
             model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
                     emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-                    dim_feedforward=512, num_heads=args.num_heads, sigma=args.sigma, dropout=0.0, vocab=x.vocab)
+                    dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab)
             ckpt = torch.load(args.load_model_predict)
             model.load_state_dict(ckpt['state_dict'])
 
@@ -412,7 +416,7 @@ if __name__ == '__main__':
         print('Classfication after whole script:', flush=True)
         model.to('cuda:0')
         with torch.no_grad():
-            preds = classification(model, test_dataset, save_prefix=args.save_prefix, num_subsamples=args.num_subsamples, id_annotated=(args.num_subsamples > 1))
+            ground_truth, preds  = classification(model, test_dataset, save_prefix=args.save_prefix, num_subsamples=args.num_subsamples, id_annotated=(args.num_subsamples > 1))
     if args.generate:
         print('Generation after whole script:', flush=True)
         if model.pred_pair_probs:

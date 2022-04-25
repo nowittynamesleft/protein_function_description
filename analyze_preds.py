@@ -21,6 +21,7 @@ def arguments():
     print(args)
     return args
 
+
 def compute_oversmoothing_logratio(logits, target, non_pad_mask, eos_idx, margin=1e-5):
     # from Kulikov et al. 2021
     full_lprobs = torch.log_softmax(logits, dim=-1)

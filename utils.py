@@ -4,6 +4,15 @@ from torch.nn import functional as F
 import numpy as np
 import pickle
 from fasta_loader import load_fasta, seq2onehot
+import os
+
+
+def get_last_epoch_checkpoint(exp_folder):
+    checkpoints = os.listdir(exp_folder + 'checkpoints/')
+    checkpoint_epochs = [int(checkpoint.split('epoch=')[1].split('-')[0]) for checkpoint in checkpoints]
+    last_epoch_ind = np.argmax(checkpoint_epochs)
+    last_epoch_checkpoint = checkpoints[last_epoch_ind]
+    return exp_folder + 'checkpoints/' + last_epoch_checkpoint
 
 
 def micro_AUPR(label, score):
