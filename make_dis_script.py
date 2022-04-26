@@ -71,6 +71,6 @@ if __name__ == '__main__':
             outfile.write(first_part + checkpoint_file + ' ' + str(num_subsamples) + ' ' + str(classify_seq_set_len) + ' ' + ' --save_prefix ' + save_prefix + ' &> ' + save_prefix + '_' + type_of_run +'.out\"\n')
         elif type_of_run == 'generate':
             checkpoint_file = get_last_epoch_checkpoint(experiment_folder)
-            outfile.write(first_part + checkpoint_file + ' --save_prefix ' + save_prefix + '--annot_file &> ' + save_prefix + '_' + type_of_run + '.out\"\n')
+            outfile.write(first_part + checkpoint_file + ' --save_prefix ' + save_prefix + ' --annot_file &> ' + save_prefix + '_' + type_of_run + '.out\"\n')
 
 

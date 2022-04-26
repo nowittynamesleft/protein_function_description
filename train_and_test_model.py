@@ -183,9 +183,10 @@ def predict_all_prots_of_go_term(trainer, model, num_pred_terms, save_prefix, da
 
 def predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset, save_prefix):
     pred_output = trainer.predict(model, test_dl)
-    
+    # pred_output shape: num_batches * 2 (preds, probs) * beam_width * lengths of outputs
     preds = [candidate_preds[0] for batch in pred_output for candidate_preds in batch[0]]
     probs = [candidate_probs[0] for batch in pred_output for candidate_probs in batch[1]]
+    #import ipdb; ipdb.set_trace()
     word_preds = convert_preds_to_words(preds, model.vocab)
     outfile = open(save_prefix + '_subsample_prot_preds.txt', 'w')
     for i in range(len(preds)):
@@ -193,7 +194,7 @@ def predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset,
         outfile.write('Prediction:\n')
         outfile.write(' '.join(word_preds[i]) + '\n')
         outfile.write('Probability score:\t' + str(torch.exp(probs[i]).item()) + '\n')
-        outfile.write('Actual description:\n' + ' '.join(x.go_descriptions[i]) + '\n\n')
+        outfile.write('Actual description:\n' + ' '.join(test_dataset.go_descriptions[i]) + '\n\n')
     outfile.close()
     
 

@@ -1,4 +1,4 @@
-from data import seq_go_collate_pad, SequenceDataset
+from data import seq_go_collate_pad, SequenceDataset, SequenceGOCSVDataset
 from torch.utils.data import DataLoader, Subset
 import torch
 from alt_transformer_model import SeqSet2SeqTransformer
@@ -46,9 +46,9 @@ def main(args):
     model.to('cuda:0')
     trainer = Trainer(gpus=num_gpus)
     if not args.annot_file:
-        fasta_description(args.fasta_file, trainer, model, args.save_prefix)
+        fasta_description(args.input_file, trainer, model, args.save_prefix)
     else:
-        annotation_file_description(args.annot_file, trainer, model, args.save_prefix)
+        annotation_file_description(args.input_file, trainer, model, args.save_prefix)
     
     
 if __name__ == '__main__':
