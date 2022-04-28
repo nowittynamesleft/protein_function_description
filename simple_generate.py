@@ -44,7 +44,7 @@ def main(args):
     num_gpus = 1
     model = SeqSet2SeqTransformer.load_from_checkpoint(args.model_checkpoint)
     model.to('cuda:0')
-    trainer = Trainer(gpus=num_gpus)
+    trainer = Trainer(gpus=num_gpus, logger=False)
     if not args.annot_file:
         fasta_description(args.input_file, trainer, model, args.save_prefix)
     else:

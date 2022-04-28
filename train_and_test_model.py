@@ -23,10 +23,10 @@ obofile = 'go.obo'
 
 def arguments():
     parser = argparse.ArgumentParser()
-    #parser.add_argument('--learning_rate', type=float, default=0.01)
     parser.add_argument('annot_seq_file', type=str, help='Training annotation dataset')
     parser.add_argument('test_annot_seq_file', type=str, help='Test annotation dataset for validation and prediction')
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--learning_rate', type=float, default=0.01)
+    parser.add_argument('--epochs', type=int, default=1000)
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--seq_set_len', type=int, default=32)
     parser.add_argument('--emb_size', type=int, default=256)
@@ -267,7 +267,6 @@ def classification(model, dataset, save_prefix='no_prefix', num_subsamples=10, i
             try:
                 (prot_id_sets, seq_sets, _, _, _) = dataset.get_identically_annotated_subsamples(ind, num_subsamples)
             except AssertionError: # not enough proteins for term to sample identically annotated subsamples
-                print('AssertionError hit ' + str(ind))
                 continue
         else:
             (prot_id_sets, seq_sets) = zip(*[dataset[ind] for it in range(num_subsamples)])
@@ -344,7 +343,7 @@ if __name__ == '__main__':
         print('Vocab size:' + str(len(x.vocab)), flush=True)
         model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
                 emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-                dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab)
+                dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab, learning_rate=args.learning_rate)
         pickle.dump(x.vocab, open(vocab_fname, 'wb'))
     else:
         try:
@@ -355,7 +354,7 @@ if __name__ == '__main__':
             old_model_load = True
             pickle.dump(x.vocab, open(vocab_fname, 'wb'))
 
-    test_dataset = SequenceGOCSVDataset(args.test_annot_seq_file, obofile, seq_set_len, vocab=x.vocab)
+    test_dataset = SequenceGOCSVDataset(args.test_annot_seq_file, obofile, seq_set_len, vocab=model.vocab)
     test_dl = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=dl_workers, pin_memory=True)
 
     #metric_callback = MetricsCallback()
@@ -381,7 +380,7 @@ if __name__ == '__main__':
             if old_model_load:
                 model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
                         emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-                        dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab)
+                        dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab, learning_rate=args.learning_rate)
                 ckpt = torch.load(args.model_to_load)
                 model.load_state_dict(ckpt['state_dict'])
                 model.to('cuda:0')
@@ -403,7 +402,7 @@ if __name__ == '__main__':
         if old_model_load:
             model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
                     emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-                    dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab)
+                    dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab, learning_rate=args.learning_rate)
             ckpt = torch.load(args.load_model_predict)
             model.load_state_dict(ckpt['state_dict'])
 

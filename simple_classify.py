@@ -23,7 +23,7 @@ def main(args):
     model.to('cuda:0')
     seq_set_len = args.seq_set_len
 
-    trainer = Trainer(gpus=num_gpus)
+    trainer = Trainer(gpus=num_gpus, logger=False)
     obofile = 'go.obo'
     test_dataset = SequenceGOCSVDataset(args.annot_file, obofile, seq_set_len, vocab=model.vocab)
     with torch.no_grad():
