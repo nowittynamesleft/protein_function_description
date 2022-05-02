@@ -18,7 +18,10 @@ def load_fasta(filename):
         entry = str(entry.id)
         #entry = entry.split('|')[-1]
         #entry = entry.split('/')[0]
-        entry = entry.split('|')[1]
+        try:
+            entry = entry.split('|')[1]
+        except IndexError:
+            pass # don't process it, just keep the whole name
         domain2seq[entry] = seq
     return domain2seq
 

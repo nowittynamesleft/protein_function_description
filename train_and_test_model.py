@@ -15,7 +15,7 @@ from functools import partial
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 import tqdm
-from utils import accuracy, micro_aupr 
+from utils import accuracy, micro_aupr, ensure_dir
 from analyze_preds import attribute_calculation
 
 obofile = 'go.obo'
@@ -26,6 +26,7 @@ def arguments():
     parser.add_argument('annot_seq_file', type=str, help='Training annotation dataset')
     parser.add_argument('test_annot_seq_file', type=str, help='Test annotation dataset for validation and prediction')
     parser.add_argument('--learning_rate', type=float, default=0.01)
+    parser.add_argument('--use_scheduler', action='store_true')
     parser.add_argument('--epochs', type=int, default=1000)
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--seq_set_len', type=int, default=32)
@@ -328,7 +329,8 @@ if __name__ == '__main__':
         loaded_vocab = pickle.load(open(args.load_vocab, 'rb'))
         x = SequenceGOCSVDataset(args.annot_seq_file, obofile, seq_set_len, vocab=loaded_vocab, save_prefix=args.save_prefix)
     else:
-        vocab_fname = args.save_prefix + '_vocab.pckl'
+        ensure_dir('vocab_files/')
+        vocab_fname = 'vocab_files/' + args.save_prefix + '_vocab.pckl'
         x = SequenceGOCSVDataset(args.annot_seq_file, obofile, seq_set_len, save_prefix=args.save_prefix)
 
     num_gpus = 1
@@ -343,7 +345,8 @@ if __name__ == '__main__':
         print('Vocab size:' + str(len(x.vocab)), flush=True)
         model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
                 emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-                dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab, learning_rate=args.learning_rate)
+                dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab, learning_rate=args.learning_rate,
+                    has_scheduler=args.use_scheduler)
         pickle.dump(x.vocab, open(vocab_fname, 'wb'))
     else:
         try:
@@ -380,7 +383,8 @@ if __name__ == '__main__':
             if old_model_load:
                 model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
                         emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-                        dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab, learning_rate=args.learning_rate)
+                        dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab, learning_rate=args.learning_rate,
+                    has_scheduler=args.use_scheduler)
                 ckpt = torch.load(args.model_to_load)
                 model.load_state_dict(ckpt['state_dict'])
                 model.to('cuda:0')
@@ -402,7 +406,8 @@ if __name__ == '__main__':
         if old_model_load:
             model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
                     emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-                    dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab, learning_rate=args.learning_rate)
+                    dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab, learning_rate=args.learning_rate,
+                    has_scheduler=args.use_scheduler)
             ckpt = torch.load(args.load_model_predict)
             model.load_state_dict(ckpt['state_dict'])
 

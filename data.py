@@ -113,12 +113,14 @@ class SequenceGOCSVDataset(Dataset):
         adj_dict = dict(graph.adjacency())
         self.adj_mat = torch.zeros((len(self.go_terms), len(self.go_terms)), dtype=bool)
         for i, key in enumerate(self.go_terms):
-                parents = adj_dict[key].keys()
-                parent_inds = []
-                for parent in parents:
-                    if parent in self.go_terms:
-                        parent_inds.append(np.where(self.go_terms == parent)[0])
-                self.adj_mat[i, torch.tensor(parent_inds, dtype=torch.long)] = True
+            parents = adj_dict[key].keys()
+            parent_inds = []
+            for parent in parents:
+                if parent in self.go_terms:
+                    parent_inds.append(np.where(self.go_terms == parent)[0])
+            #self.adj_mat[i, torch.tensor(parent_inds, dtype=torch.long)] = True
+            if len(parent_inds) > 0:
+                self.adj_mat[i, np.concatenate(parent_inds)] = True
         id_to_depth_mf = dict(nx.single_target_shortest_path_length(graph, 'GO:0003674'))
         id_to_depth_bp = dict(nx.single_target_shortest_path_length(graph, 'GO:0008150'))
         id_to_depth_cc = dict(nx.single_target_shortest_path_length(graph, 'GO:0005575'))

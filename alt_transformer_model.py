@@ -11,6 +11,7 @@ import io
 import time
 import pytorch_lightning as pl
 import numpy as np
+from torch.optim.lr_scheduler import CyclicLR
 
 from torch.nn import (TransformerEncoder, TransformerDecoder,
                       TransformerEncoderLayer, TransformerDecoderLayer)
@@ -94,7 +95,8 @@ class LengthConverter(pl.LightningModule):
 class SeqSet2SeqTransformer(pl.LightningModule):
     def __init__(self, num_encoder_layers: int, num_decoder_layers: int,
                  emb_size: int, src_vocab_size: int, tgt_vocab_size: int,
-                 dim_feedforward:int = 512, num_heads: int = 1, sigma:float = 1.0, dropout:float = 0.1, vocab=None, learning_rate=1e-3):
+                 dim_feedforward:int = 512, num_heads: int = 1, sigma:float = 1.0, dropout:float = 0.1, vocab=None, learning_rate=1e-3,
+                 has_scheduler=None):
         super(SeqSet2SeqTransformer, self).__init__()
         encoder_layer = TransformerEncoderLayer(d_model=emb_size, nhead=num_heads,
                                                 dim_feedforward=dim_feedforward, batch_first=True)
@@ -114,6 +116,10 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         self.max_desc_len = 100
         self.vocab = vocab
         self.pred_pair_probs = False
+        self.has_scheduler = has_scheduler
+        if has_scheduler:
+            print('Using scheduler, manual optimization.')
+            self.automatic_optimization = False
         self.save_hyperparameters()
 
     def convert_batch_preds_to_words(self, batch):
@@ -213,6 +219,13 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             print('Loss for this batch: ' + str(loss))
         self.log("loss", loss, on_epoch=True, on_step=False, prog_bar=True)
         self.log("sigma", self.len_convert.sigma, on_epoch=True, on_step=False, prog_bar=True)
+        if self.has_scheduler:
+            optimizer = self.optimizers()
+            self.manual_backward(loss) # need to do this when doing manual optimization
+            optimizer.step() # need to do this when doing manual optimization
+            if self.trainer.is_last_batch: # step scheduler every epoch
+                sch = self.lr_schedulers()
+                sch.step()
          
         return {'loss': loss}
     
@@ -417,7 +430,11 @@ class SeqSet2SeqTransformer(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
-        return optimizer
+        if self.has_scheduler: 
+            lr_scheduler = CyclicLR(optimizer, cycle_momentum=False, base_lr=self.learning_rate, max_lr=5*self.learning_rate)
+            return [optimizer], [lr_scheduler]
+        else:
+            return optimizer
 
     def encode(self, src: Tensor, src_padding_mask: Tensor):
         batch_size, seq_set_len, max_len = src.shape
