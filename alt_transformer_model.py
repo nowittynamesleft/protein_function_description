@@ -15,6 +15,7 @@ from torch.optim.lr_scheduler import CyclicLR
 
 from torch.nn import (TransformerEncoder, TransformerDecoder,
                       TransformerEncoderLayer, TransformerDecoderLayer)
+from analyze_preds import compute_oversmoothing_logratio
 
 
 class PositionalEncoding(nn.Module):
@@ -96,7 +97,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
     def __init__(self, num_encoder_layers: int, num_decoder_layers: int,
                  emb_size: int, src_vocab_size: int, tgt_vocab_size: int,
                  dim_feedforward:int = 512, num_heads: int = 1, sigma:float = 1.0, dropout:float = 0.1, vocab=None, learning_rate=1e-3,
-                 has_scheduler=None):
+                 has_scheduler=None, label_smoothing=0.0):
         super(SeqSet2SeqTransformer, self).__init__()
         encoder_layer = TransformerEncoderLayer(d_model=emb_size, nhead=num_heads,
                                                 dim_feedforward=dim_feedforward, batch_first=True)
@@ -111,7 +112,9 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         self.tgt_vocab_size = tgt_vocab_size
         self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout)
         self.emb_size = emb_size
-        self.loss_fn = nn.CrossEntropyLoss(ignore_index=0) # ignore padding in calculating loss; 0 is padding index
+        if label_smoothing != 0.0:
+            print('Using label_smoothing ' + str(label_smoothing))
+        self.loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing, ignore_index=0) # ignore padding in calculating loss; 0 is padding index
         self.len_convert = LengthConverter(sigma=sigma)
         self.max_desc_len = 100
         self.vocab = vocab
@@ -204,13 +207,14 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         GO_pad_mask_output = GO_pad_mask[:, 1:]
         tgt_mask = create_target_masks(GO_padded_input, device=self.device)
 
-        outputs = self(src=S_padded, trg=GO_padded_input, tgt_mask=tgt_mask, src_padding_mask=S_pad_mask,
+        logits = self(src=S_padded, trg=GO_padded_input, tgt_mask=tgt_mask, src_padding_mask=S_pad_mask,
             tgt_padding_mask=GO_pad_mask_input, memory_key_padding_mask=None)
 
-        #print(outputs.shape)
+        eos_idx = self.tgt_vocab_size - 1
+        oversmooth_loss, osr = compute_oversmoothing_logratio(logits.transpose(1,2), GO_padded_output, ~GO_pad_mask_output, eos_idx, margin=1e-5)
         
-        _, preds = outputs.max(axis=1)
-        loss = self.loss_fn(outputs, GO_padded_output) # loss function should ignore padding index (0)
+        _, preds = logits.max(axis=1)
+        loss = self.loss_fn(logits, GO_padded_output) # loss function should ignore padding index (0)
         if batch_idx == 0:
             print('First batch outputs:')
             print(self.convert_batch_preds_to_words(preds))
@@ -219,6 +223,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             print('Loss for this batch: ' + str(loss))
         self.log("loss", loss, on_epoch=True, on_step=False, prog_bar=True)
         self.log("sigma", self.len_convert.sigma, on_epoch=True, on_step=False, prog_bar=True)
+        self.log("oversmooth_rate", osr, on_epoch=True, on_step=False, prog_bar=True)
         if self.has_scheduler:
             optimizer = self.optimizers()
             self.manual_backward(loss) # need to do this when doing manual optimization

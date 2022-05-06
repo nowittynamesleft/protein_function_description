@@ -15,6 +15,7 @@ def arguments():
     parser.add_argument('type_of_run', type=str, help='train, classify or generate')
     parser.add_argument('prefix', type=str)
     parser.add_argument('--cutoff_dataset', action="store_true", help='Use the cutoff dataset instead of the full dataset.')
+    parser.add_argument('--bpe_dataset', action="store_true", help='Use the no-cutoff bpe dataset instead of the regular word dataset.')
     parser.add_argument('--num_hparam_sets', type=int, default=None, help='Required only when train type of run; samples hparams from dict to run.')
     args = parser.parse_args()
     print(args)
@@ -32,10 +33,14 @@ if __name__ == '__main__':
         print('There should not be a number of sampled hparam sets for classify or generate settings. There should be a hyperparam list pickle that is loaded named: ' + hyperparam_list_fname)
         print('Exiting without making script.')
         exit()
-    if args.cutoff_dataset:
+    if args.cutoff_dataset and not args.bpe_dataset:
         train_set = 'uniprot_sprot_training_training_split.csv'
         val_set = 'uniprot_sprot_training_val_split.csv'
         classify_gen_set = val_set
+    elif args.bpe_dataset:
+        train_set = 'uniprot_sprot_annot_no_go_cutoff_randomly_split_train_set_codified_1000_ops.tsv'
+        val_set = 'uniprot_sprot_annot_no_go_cutoff_randomly_split_validation_set_codified_1000_ops.tsv'
+        classify_gen_set = 'random_split_first_1000_val_set_codified_1000_ops.tsv'
     else:
         train_set = 'uniprot_sprot_annot_no_go_cutoff_randomly_split_train_set.csv'
         val_set = 'uniprot_sprot_annot_no_go_cutoff_randomly_split_validation_set.csv'
@@ -48,7 +53,8 @@ if __name__ == '__main__':
                         'sigma': [0.25, 0.5, 1.0, 2.0],
                         'dropout': [0.0, 0.25],
                         'seq_set_len': [32],
-                        'learning_rate': [1e-4, 5e-4, 1e-3, 2e-3, 5e-3]
+                        'learning_rate': [1e-4, 5e-4, 1e-3, 2e-3, 5e-3],
+                        'label_smoothing': [0.0, 0.1, 0.2]
                         }
     '''
     hyperparam_dict = { 'num_encoder_layers': [1],

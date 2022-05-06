@@ -88,7 +88,7 @@ def attribute_calculation(prob_mat, correct_go_mask, n, go_adj_mat):
     
     return aupr, correctness, sp, robustness_score
 
-def get_attributes(pred_fname, go_adj_mat, n, go_term_mask=None, no_input_file=None):
+def get_attributes(pred_fname, go_adj_mat, n, go_term_mask=None, no_input_file=None, with_adjustment=True):
     pred_dict = pickle.load(open(pred_fname, 'rb'))
     if no_input_file is not None:
         score_dict = pickle.load(open(no_input_file, 'rb'))
@@ -121,14 +121,16 @@ def get_attributes(pred_fname, go_adj_mat, n, go_term_mask=None, no_input_file=N
     print('Average rank correlation: ' + str(avg_corr))
     aupr, correctness, sp, robustness_score = attribute_calculation(prob_mat, correct_go_mask, n, go_adj_mat)
 
-    probabilities = np.exp(prob_mat.numpy())
-    avg_probs = probabilities.sum(axis=0)/probabilities.shape[0]
-    log_avg_probs = np.log(avg_probs)
-    new_prob_mat = prob_mat - log_avg_probs.reshape(1, -1)
-    avg_corr = get_pairwise_rank_correlations(new_prob_mat)
+    if with_adjustment:
+        print('Adjusting to get p(x|y) scores instead, returning those as actual performances')
+        probabilities = np.exp(prob_mat.numpy())
+        avg_probs = probabilities.sum(axis=0)/probabilities.shape[0]
+        log_avg_probs = np.log(avg_probs)
+        new_prob_mat = prob_mat - log_avg_probs.reshape(1, -1)
+        avg_corr = get_pairwise_rank_correlations(new_prob_mat)
 
-    print('Average rank correlation of prob mat with subtracted log p(y): ' + str(avg_corr))
-    attribute_calculation(new_prob_mat, correct_go_mask, n, go_adj_mat)
+        print('Average rank correlation of prob mat with subtracted log p(y): ' + str(avg_corr))
+        aupr, correctness, sp, robustness_score = attribute_calculation(new_prob_mat, correct_go_mask, n, go_adj_mat)
 
     if no_input_file is not None:
         no_input_adjusted_prob_mat = prob_mat - desc_background_log_probs.reshape(1, -1)

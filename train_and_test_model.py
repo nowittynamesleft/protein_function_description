@@ -36,6 +36,7 @@ def arguments():
     parser.add_argument('--num_decoder_layers', type=int, default=1)
     parser.add_argument('--num_heads', type=int, default=4)
     parser.add_argument('--dropout', type=float, default=0.0)
+    parser.add_argument('--label_smoothing', type=float, default=0.0)
     parser.add_argument('--sigma', type=float, default=1.0, 
             help='Fixed sigma parameter for the length transform.')
     parser.add_argument('--save_prefix', type=str, default='no_save_prefix')
@@ -183,10 +184,23 @@ def predict_all_prots_of_go_term(trainer, model, num_pred_terms, save_prefix, da
 
 
 def predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset, save_prefix):
-    pred_output = trainer.predict(model, test_dl)
+    #pred_output = trainer.predict(model, test_dl)
+    common_term_sets = []
+    preds = []
+    probs = []
+    for i in range(len(test_dataset)):
+        (prot_id_sets, seq_sets, common_terms, _, _) = test_dataset.get_identically_annotated_subsamples(i, 1)
+        S_padded, S_mask = seq_go_collate_pad(list(zip(prot_id_sets, seq_sets)), seq_set_size=len(seq_sets[0])) # batch sizes of 1 each, index out of it
+        candidate_sentences, candidate_probs = model.beam_search([S_padded, S_mask])
+        top_candidate = candidate_sentences[0]
+        top_prob = candidate_probs[0]
+        preds.append(top_candidate)
+        probs.append(top_prob)
+        common_term_sets.append(common_terms)
+
     # pred_output shape: num_batches * 2 (preds, probs) * beam_width * lengths of outputs
-    preds = [candidate_preds[0] for batch in pred_output for candidate_preds in batch[0]]
-    probs = [candidate_probs[0] for batch in pred_output for candidate_probs in batch[1]]
+    #preds = [candidate_preds[0] for batch in pred_output for candidate_preds in batch[0]]
+    #probs = [candidate_probs[0] for batch in pred_output for candidate_probs in batch[1]]
     #import ipdb; ipdb.set_trace()
     word_preds = convert_preds_to_words(preds, model.vocab)
     outfile = open(save_prefix + '_subsample_prot_preds.txt', 'w')
@@ -195,7 +209,8 @@ def predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset,
         outfile.write('Prediction:\n')
         outfile.write(' '.join(word_preds[i]) + '\n')
         outfile.write('Probability score:\t' + str(torch.exp(probs[i]).item()) + '\n')
-        outfile.write('Actual description:\n' + ' '.join(test_dataset.go_descriptions[i]) + '\n\n')
+        outfile.write('Actual description:\n' + ' '.join(test_dataset.go_descriptions[i]))
+        outfile.write('Other valid GO terms: ' + ', '.join(common_term_sets[i]) + '\n\n')
     outfile.close()
     
 
@@ -341,12 +356,18 @@ if __name__ == '__main__':
     
 
     collate_fn = x.collate_fn
+    model_kwargs = {'num_encoder_layers': args.num_encoder_layers, 'num_decoder_layers': args.num_decoder_layers, 
+            'emb_size': emb_size, 'src_vocab_size': len(x.alphabet), 'tgt_vocab_size': len(x.vocab), 
+            'dim_feedforward': args.dim_feedforward, 'num_heads': args.num_heads, 'sigma': args.sigma, 'dropout': args.dropout, 'vocab': x.vocab, 'learning_rate': args.learning_rate, 'has_scheduler' : args.use_scheduler, 'label_smoothing': args.label_smoothing}
     if args.model_to_load is None:
         print('Vocab size:' + str(len(x.vocab)), flush=True)
+        '''
         model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
                 emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
                 dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab, learning_rate=args.learning_rate,
                     has_scheduler=args.use_scheduler)
+        '''
+        model = SeqSet2SeqTransformer(**model_kwargs)
         pickle.dump(x.vocab, open(vocab_fname, 'wb'))
     else:
         try:
@@ -381,10 +402,13 @@ if __name__ == '__main__':
         if args.load_train:
             print('Loading model for training: ' + args.model_to_load, flush=True)
             if old_model_load:
+                '''
                 model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
                         emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
                         dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab, learning_rate=args.learning_rate,
                     has_scheduler=args.use_scheduler)
+                '''
+                model = SeqSet2SeqTransformer(**model_kwargs)
                 ckpt = torch.load(args.model_to_load)
                 model.load_state_dict(ckpt['state_dict'])
                 model.to('cuda:0')
@@ -404,10 +428,13 @@ if __name__ == '__main__':
     else:
         print('Loading model for predicting only: ' + args.model_to_load, flush=True)
         if old_model_load:
+            '''
             model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
                     emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
                     dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab, learning_rate=args.learning_rate,
                     has_scheduler=args.use_scheduler)
+            '''
+            model = SeqSet2SeqTransformer(**model_kwargs)
             ckpt = torch.load(args.load_model_predict)
             model.load_state_dict(ckpt['state_dict'])
 
