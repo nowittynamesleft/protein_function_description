@@ -54,7 +54,8 @@ if __name__ == '__main__':
                         'dropout': [0.0, 0.25],
                         'seq_set_len': [32],
                         'learning_rate': [1e-4, 5e-4, 1e-3, 2e-3, 5e-3],
-                        'label_smoothing': [0.0, 0.1, 0.2]
+                        'label_smoothing': [0.0, 0.1, 0.2],
+                        'oversmooth_param': [0.0, 0.1, 0.2]
                         }
     '''
     hyperparam_dict = { 'num_encoder_layers': [1],

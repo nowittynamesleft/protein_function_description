@@ -97,7 +97,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
     def __init__(self, num_encoder_layers: int, num_decoder_layers: int,
                  emb_size: int, src_vocab_size: int, tgt_vocab_size: int,
                  dim_feedforward:int = 512, num_heads: int = 1, sigma:float = 1.0, dropout:float = 0.1, vocab=None, learning_rate=1e-3,
-                 has_scheduler=None, label_smoothing=0.0):
+                 has_scheduler=None, label_smoothing=0.0, oversmooth_param=0.0):
         super(SeqSet2SeqTransformer, self).__init__()
         encoder_layer = TransformerEncoderLayer(d_model=emb_size, nhead=num_heads,
                                                 dim_feedforward=dim_feedforward, batch_first=True)
@@ -120,6 +120,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         self.vocab = vocab
         self.pred_pair_probs = False
         self.has_scheduler = has_scheduler
+        self.oversmooth_param = oversmooth_param
         if has_scheduler:
             print('Using scheduler, manual optimization.')
             self.automatic_optimization = False
@@ -211,10 +212,12 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             tgt_padding_mask=GO_pad_mask_input, memory_key_padding_mask=None)
 
         eos_idx = self.tgt_vocab_size - 1
+        #import ipdb; ipdb.set_trace()
         oversmooth_loss, osr = compute_oversmoothing_logratio(logits.transpose(1,2), GO_padded_output, ~GO_pad_mask_output, eos_idx, margin=1e-5)
         
         _, preds = logits.max(axis=1)
-        loss = self.loss_fn(logits, GO_padded_output) # loss function should ignore padding index (0)
+        loss = self.loss_fn(logits, GO_padded_output)
+        total_loss = (1 - self.oversmooth_param)*loss + self.oversmooth_param*oversmooth_loss # loss function should ignore padding index (0)
         if batch_idx == 0:
             print('First batch outputs:')
             print(self.convert_batch_preds_to_words(preds))
@@ -222,17 +225,18 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             print(self.convert_batch_preds_to_words(GO_padded_output))
             print('Loss for this batch: ' + str(loss))
         self.log("loss", loss, on_epoch=True, on_step=False, prog_bar=True)
+        self.log("oversmooth_loss", oversmooth_loss, on_epoch=True, on_step=False, prog_bar=True)
         self.log("sigma", self.len_convert.sigma, on_epoch=True, on_step=False, prog_bar=True)
         self.log("oversmooth_rate", osr, on_epoch=True, on_step=False, prog_bar=True)
         if self.has_scheduler:
             optimizer = self.optimizers()
-            self.manual_backward(loss) # need to do this when doing manual optimization
+            self.manual_backward(total_loss) # need to do this when doing manual optimization
             optimizer.step() # need to do this when doing manual optimization
             if self.trainer.is_last_batch: # step scheduler every epoch
                 sch = self.lr_schedulers()
                 sch.step()
          
-        return {'loss': loss}
+        return {'loss': total_loss}
     
     def validation_step(self, valid_batch, batch_idx):
         S_padded, S_pad_mask, GO_padded_all, GO_pad_mask = valid_batch 

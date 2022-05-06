@@ -37,6 +37,7 @@ def arguments():
     parser.add_argument('--num_heads', type=int, default=4)
     parser.add_argument('--dropout', type=float, default=0.0)
     parser.add_argument('--label_smoothing', type=float, default=0.0)
+    parser.add_argument('--oversmooth_param', type=float, default=0.0)
     parser.add_argument('--sigma', type=float, default=1.0, 
             help='Fixed sigma parameter for the length transform.')
     parser.add_argument('--save_prefix', type=str, default='no_save_prefix')
@@ -358,7 +359,7 @@ if __name__ == '__main__':
     collate_fn = x.collate_fn
     model_kwargs = {'num_encoder_layers': args.num_encoder_layers, 'num_decoder_layers': args.num_decoder_layers, 
             'emb_size': emb_size, 'src_vocab_size': len(x.alphabet), 'tgt_vocab_size': len(x.vocab), 
-            'dim_feedforward': args.dim_feedforward, 'num_heads': args.num_heads, 'sigma': args.sigma, 'dropout': args.dropout, 'vocab': x.vocab, 'learning_rate': args.learning_rate, 'has_scheduler' : args.use_scheduler, 'label_smoothing': args.label_smoothing}
+            'dim_feedforward': args.dim_feedforward, 'num_heads': args.num_heads, 'sigma': args.sigma, 'dropout': args.dropout, 'vocab': x.vocab, 'learning_rate': args.learning_rate, 'has_scheduler' : args.use_scheduler, 'label_smoothing': args.label_smoothing, 'oversmooth_param': args.oversmooth_param}
     if args.model_to_load is None:
         print('Vocab size:' + str(len(x.vocab)), flush=True)
         '''
