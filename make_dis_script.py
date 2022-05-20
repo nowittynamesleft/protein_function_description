@@ -12,11 +12,12 @@ then using the last checkpoints of those models to classify, and generate descri
 
 def arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument('type_of_run', type=str, help='train, classify or generate')
+    parser.add_argument('type_of_run', type=str, help='train, oversmooth_tune, classify or generate')
     parser.add_argument('prefix', type=str)
     parser.add_argument('--cutoff_dataset', action="store_true", help='Use the cutoff dataset instead of the full dataset.')
     parser.add_argument('--bpe_dataset', action="store_true", help='Use the no-cutoff bpe dataset instead of the regular word dataset.')
     parser.add_argument('--num_hparam_sets', type=int, default=None, help='Required only when train type of run; samples hparams from dict to run.')
+    parser.add_argument('--no_len_penalty', action="store_true", help='Remove length penalty for generation/classification.')
     args = parser.parse_args()
     print(args)
     return args
@@ -26,6 +27,8 @@ if __name__ == '__main__':
     args = arguments()
     type_of_run = args.type_of_run
     prefix = args.prefix
+    if type_of_run == 'oversmooth_tune':
+        prefix += '_oversmooth_param_0.9'
     hyperparam_list_fname = prefix + '_hparams.pckl'
     if type_of_run == 'train':
         num_hparam_sets = args.num_hparam_sets
@@ -53,9 +56,9 @@ if __name__ == '__main__':
                         'sigma': [0.25, 0.5, 1.0, 2.0],
                         'dropout': [0.0, 0.25],
                         'seq_set_len': [32],
-                        'learning_rate': [1e-4, 5e-4, 1e-3, 2e-3, 5e-3],
+                        'learning_rate': [1e-4, 5e-4, 1e-3, 2e-3],
                         'label_smoothing': [0.0, 0.1, 0.2],
-                        'oversmooth_param': [0.0, 0.1, 0.2]
+                        #'oversmooth_param': [0.0, 0.1, 0.2] # just tune after training
                         }
     '''
     hyperparam_dict = { 'num_encoder_layers': [1],
@@ -85,7 +88,7 @@ if __name__ == '__main__':
     classify_seq_set_len = 32
     outfile = open(prefix + '_' + type_of_run + '.sh', 'w')
     ensure_dir('run_log_files/')
-    if type_of_run == 'train':
+    if type_of_run == 'train' or type_of_run == 'oversmooth_tune':
         first_part = 'sbatch -N 1 -p gpu --gres=gpu:1 --mem 150G --wrap \"python train_and_test_model.py ' + train_set + ' ' + val_set + ' '
     elif type_of_run == 'classify':
         first_part = 'sbatch -N 1 -p gpu --gres=gpu:1 --mem 150G --wrap \"python simple_classify.py ' + classify_gen_set + ' '
@@ -97,11 +100,20 @@ if __name__ == '__main__':
         experiment_folder = 'lightning_logs/' + save_prefix + '_experiment/version_0/' 
         if type_of_run == 'train':
             outfile.write(first_part + ' '.join(strings) + ' --save_prefix ' + save_prefix + ' &> ' + 'run_log_files/' + save_prefix + '_' + type_of_run +'.out\"\n')
+        elif type_of_run == 'oversmooth_tune':
+            checkpoint_file = get_last_epoch_checkpoint(experiment_folder)
+            outfile.write(first_part + ' '.join(strings) + ' --save_prefix ' + save_prefix + ' --oversmooth_param 0.9 ' + ' --load_train --model_to_load ' + checkpoint_file  + ' &> ' + 'run_log_files/' + save_prefix + '_' + type_of_run +'.out\"\n')
         elif type_of_run == 'classify':
             checkpoint_file = get_last_epoch_checkpoint(experiment_folder)
-            outfile.write(first_part + checkpoint_file + ' ' + str(num_subsamples) + ' ' + str(classify_seq_set_len) + ' ' + ' --save_prefix ' + save_prefix + ' &> ' + 'run_log_files/' + save_prefix + '_' + type_of_run +'.out\"\n')
+            if args.no_len_penalty:
+                outfile.write(first_part + checkpoint_file + ' ' + str(num_subsamples) + ' ' + str(classify_seq_set_len) + ' --len_penalty 0.0 ' + ' --save_prefix ' + save_prefix + ' &> ' + 'run_log_files/' + save_prefix + '_' + type_of_run +'.out\"\n')
+            else:
+                outfile.write(first_part + checkpoint_file + ' ' + str(num_subsamples) + ' ' + str(classify_seq_set_len) + ' ' + ' --save_prefix ' + save_prefix + ' &> ' + 'run_log_files/' + save_prefix + '_' + type_of_run +'.out\"\n')
         elif type_of_run == 'generate':
             checkpoint_file = get_last_epoch_checkpoint(experiment_folder)
-            outfile.write(first_part + checkpoint_file + ' --save_prefix ' + save_prefix + ' --annot_file &> ' + 'run_log_files/' + save_prefix + '_' + type_of_run + '.out\"\n')
+            if args.no_len_penalty:
+                outfile.write(first_part + checkpoint_file + ' --save_prefix ' + save_prefix + ' --len_penalty 0.0 --annot_file &> ' + 'run_log_files/' + save_prefix + '_' + type_of_run + '.out\"\n')
+            else:
+                outfile.write(first_part + checkpoint_file + ' --save_prefix ' + save_prefix + ' --annot_file &> ' + 'run_log_files/' + save_prefix + '_' + type_of_run + '.out\"\n')
 
 

@@ -56,8 +56,11 @@ class SequenceGOCSVDataset(Dataset):
         split sequences by comma, these are the list for that GO_ID
 
     """
-    def __init__(self, go_file, obo_file, num_samples, vocab=None, include_go=True, save_prefix='no_prefix'):
-        self.read_annot_info(go_file)
+    def __init__(self, go_file, obo_file, num_samples, vocab=None, include_go=True, subset_inds=None, save_prefix='no_prefix'):
+        self.go_file = go_file
+        self.obo_file = obo_file
+        self.vocab = vocab
+        self.read_annot_info(go_file, subset_inds=subset_inds)
         self.go_annot_mat, self.prot_id2annot_ind = create_annot_mat(self.all_prot_ids, self.go_terms, self.go2prot_ids)
         self.init_obo_info(obo_file)
         self.tokenize_descriptions(self.go_desc_strings, vocab, save_prefix)
@@ -69,9 +72,10 @@ class SequenceGOCSVDataset(Dataset):
         self.include_all_valid_terms = False
         self.sample = True
 
-
-    def read_annot_info(self, go_file):
+    def read_annot_info(self, go_file, subset_inds=None):
         annot_df = pd.read_csv(go_file, sep='\t')
+        if subset_inds is not None:
+            annot_df = annot_df.iloc[subset_inds]
         prot_seq_rows = annot_df.apply(lambda row: row['Prot-seqs'].split(','), axis=1)
         prot_seq_rows = [[seq2AAinds(prot) for prot in prot_seq_row] for prot_seq_row in prot_seq_rows]
         self.go2seqs = dict(zip(annot_df['GO-term'], prot_seq_rows))
@@ -150,11 +154,12 @@ class SequenceGOCSVDataset(Dataset):
         union_go_term_mask = np.any(self.go_annot_mat[annot_inds], axis=0)
         return union_go_term_mask
 
-    def get_identically_annotated_subsamples(self, go_term_index, num_sets):
+    def get_identically_annotated_subsamples(self, go_term_index, num_sets, verbose=1):
         try:
             assert num_sets > 1
         except AssertionError:
-            print('Warning: num_sets to subsample must be greater than 1 for robustness calculation to make sense.')
+            if verbose > 0:
+                print('Warning: num_sets to subsample must be greater than 1 for robustness calculation to make sense.')
         # get multiple subsets of proteins that have the same GO terms in common within each set of proteins, given a single go term that you want the sets to have
         annotated_seqs = self.get_annotated_seqs(go_term_index)[0]
         annotated_prot_ids = self.get_annotated_prot_ids(go_term_index)[0] # only consider proteins containing the go term specified

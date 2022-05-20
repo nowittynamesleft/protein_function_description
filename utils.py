@@ -5,6 +5,8 @@ import numpy as np
 import pickle
 from fasta_loader import load_fasta, seq2onehot
 import os
+from torch.utils.data import Subset
+
 
 
 def get_last_epoch_checkpoint(exp_folder):
@@ -13,6 +15,11 @@ def get_last_epoch_checkpoint(exp_folder):
     last_epoch_ind = np.argmax(checkpoint_epochs)
     last_epoch_checkpoint = checkpoints[last_epoch_ind]
     return exp_folder + 'checkpoints/' + last_epoch_checkpoint
+
+
+def gmean(input_x, dim=0):
+    log_x = torch.log(input_x)
+    return torch.exp(torch.mean(log_x, dim=dim))
 
 
 def micro_AUPR(label, score):

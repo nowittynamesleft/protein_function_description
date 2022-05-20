@@ -15,7 +15,7 @@ from functools import partial
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 import tqdm
-from utils import accuracy, micro_aupr, ensure_dir
+from utils import accuracy, micro_aupr, ensure_dir, get_pairwise_rank_correlations
 from analyze_preds import attribute_calculation
 
 obofile = 'go.obo'
@@ -42,6 +42,7 @@ def arguments():
             help='Fixed sigma parameter for the length transform.')
     parser.add_argument('--save_prefix', type=str, default='no_save_prefix')
     parser.add_argument('--fasta_fname', type=str)
+    parser.add_argument('--pool_op', type=str, default='mean')
     parser.add_argument('--model_to_load', type=str, default=None, 
             help='load model to continue training')
     parser.add_argument('--load_train', action='store_true', 
@@ -176,9 +177,9 @@ def predict_all_prots_of_go_term(trainer, model, num_pred_terms, save_prefix, da
     word_preds = convert_preds_to_words(preds, dataset.vocab) # will be a num_pred_terms-length list of beam_width-length lists of sentence-length lists of words
 
     if num_pred_terms == -1 or num_pred_terms == len(dataset):
-        outfile = open(save_prefix + '_full_seq_sets_all_preds.txt', 'w')
+        outfile = open('description_predictions/' + save_prefix + '_full_seq_sets_all_preds.txt', 'w')
     else:
-        outfile = open(save_prefix + '_full_seq_sets_first_' + str(num_pred_terms) + '_preds.txt', 'w')
+        outfile = open('description_predictions/' + save_prefix + '_full_seq_sets_first_' + str(num_pred_terms) + '_preds.txt', 'w')
     for i, word_pred in enumerate(word_preds):
         outfile.write('Prediction:\n' + ' '.join(word_pred[0]) + '\nActual description:\n' + ground_truths[i] + '\n\n')
     outfile.close()
@@ -189,29 +190,43 @@ def predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset,
     common_term_sets = []
     preds = []
     probs = []
+    go_terms = []
+    go_names = []
+    go_descs = []
     for i in range(len(test_dataset)):
-        (prot_id_sets, seq_sets, common_terms, _, _) = test_dataset.get_identically_annotated_subsamples(i, 1)
+        try:
+            (prot_id_sets, seq_sets, common_terms, _, _) = test_dataset.get_identically_annotated_subsamples(i, 1, verbose=0)
+        except AssertionError: # not enough proteins for term to sample identically annotated subsamples
+            continue
         S_padded, S_mask = seq_go_collate_pad(list(zip(prot_id_sets, seq_sets)), seq_set_size=len(seq_sets[0])) # batch sizes of 1 each, index out of it
-        candidate_sentences, candidate_probs = model.beam_search([S_padded, S_mask])
-        top_candidate = candidate_sentences[0]
-        top_prob = candidate_probs[0]
+        candidate_sentences, candidate_probs = model.beam_search([S_padded.to(model.device), S_mask.to(model.device)])
+        top_candidate = candidate_sentences[0][0]
+        top_prob = candidate_probs[0][0]
+        print('Top candidate', flush=True)
+        print(top_candidate, flush=True)
         preds.append(top_candidate)
         probs.append(top_prob)
+        print('Common terms', flush=True)
+        print(common_terms, flush=True)
         common_term_sets.append(common_terms)
+        go_terms.append(test_dataset.go_terms[i])
+        go_names.append(test_dataset.go_names[i])
+        print('Ground_truth', flush=True)
+        print(test_dataset.go_desc_strings[i], flush=True)
+        go_descs.append(test_dataset.go_descriptions[i])
 
     # pred_output shape: num_batches * 2 (preds, probs) * beam_width * lengths of outputs
     #preds = [candidate_preds[0] for batch in pred_output for candidate_preds in batch[0]]
     #probs = [candidate_probs[0] for batch in pred_output for candidate_probs in batch[1]]
-    #import ipdb; ipdb.set_trace()
     word_preds = convert_preds_to_words(preds, model.vocab)
-    outfile = open(save_prefix + '_subsample_prot_preds.txt', 'w')
+    outfile = open('description_predictions/' + save_prefix + '_subsample_prot_preds.txt', 'w')
     for i in range(len(preds)):
-        outfile.write('GO term: ' + test_dataset.go_terms[i] + ': ' + test_dataset.go_names[i] + '\n')
+        outfile.write('GO term: ' + go_terms[i] + ': ' + go_names[i] + '\n')
         outfile.write('Prediction:\n')
         outfile.write(' '.join(word_preds[i]) + '\n')
         outfile.write('Probability score:\t' + str(torch.exp(probs[i]).item()) + '\n')
-        outfile.write('Actual description:\n' + ' '.join(test_dataset.go_descriptions[i]))
-        outfile.write('Other valid GO terms: ' + ', '.join(common_term_sets[i]) + '\n\n')
+        outfile.write('Actual description:\n' + ' '.join(go_descs[i]) + '\n')
+        outfile.write('All valid GO terms in current dataset: ' + ', '.join(common_term_sets[i]) + '\n\n')
     outfile.close()
     
 
@@ -221,7 +236,7 @@ def all_combined_fasta_description(model, trainer, fasta_fname, vocab, save_pref
     word_preds = convert_sample_preds_to_words([prot_preds], vocab)
     assert len(word_preds) == 1
     word_preds = word_preds[0]
-    outfile = open(save_prefix + '_all_prot_preds.txt', 'w')
+    outfile = open('description_predictions/' + save_prefix + '_all_prot_preds.txt', 'w')
     outfile.write('Proteins: ' + ','.join(prot_ids) + '\nPrediction:\n' + ' '.join(word_preds) + '\n')
     outfile.close()
 
@@ -230,7 +245,7 @@ def one_by_one_prot_fasta_description(model, fasta_fname, trainer, seq_dataset, 
     # generate predictions one by one for each protein in a fasta
     prot_ids, prot_preds = get_prot_preds(fasta_fname, trainer, model)
     word_preds = convert_sample_preds_to_words(prot_preds, seq_dataset.vocab)
-    outfile = open(save_prefix + '_single_prot_preds.txt', 'w')
+    outfile = open('description_predictions/' + save_prefix + '_single_prot_preds.txt', 'w')
     for i in range(len(word_preds)):
         outfile.write('Protein: ' + prot_ids[i] + '\nPrediction:\n' + ' '.join(word_preds[i]) + '\n')
     outfile.close()
@@ -256,7 +271,7 @@ def single_prot_description(model, annot_seq_file, loaded_vocab, save_prefix, nu
             included_term_inds.append(go_term_ind)
         go_term_ind += 1
 
-    outfile = open(save_prefix + 'single_prot_first_' + str(num_pred_terms) + '_GO_term_preds.txt', 'w')
+    outfile = open('description_predictions/' + save_prefix + 'single_prot_first_' + str(num_pred_terms) + '_GO_term_preds.txt', 'w')
     for i in range(num_pred_terms):
         included_term_ind = included_term_inds[i]
         outfile.write('GO term: ' + x.go_terms[included_term_ind] + ': ' + x.go_names[included_term_ind] + '\n')
@@ -290,7 +305,7 @@ def classification(model, dataset, save_prefix='no_prefix', num_subsamples=10, i
         valid_term_mask = [dataset.get_all_valid_term_mask(prot_id_set) for prot_id_set in prot_id_sets]
         ground_truth.extend(valid_term_mask)
         S_padded, S_mask = seq_go_collate_pad(list(zip(prot_id_sets, seq_sets)), seq_set_size=len(seq_sets[0])) # batch sizes of 1 each, index out of it
-        seq_set_desc_probs, seq_set_desc_token_probs = model.classify_seq_sets(S_padded, S_mask, GO_padded, GO_pad_masks, len_penalty=True) 
+        seq_set_desc_probs, seq_set_desc_token_probs = model.classify_seq_sets(S_padded, S_mask, GO_padded, GO_pad_masks) 
         preds.append(seq_set_desc_probs)
         all_pred_token_probs.append(seq_set_desc_token_probs)
 
@@ -303,6 +318,16 @@ def classification(model, dataset, save_prefix='no_prefix', num_subsamples=10, i
     dataset.set_include_go_mode(True)
 
     aupr, correctness, sp, robustness_score = attribute_calculation(preds, ground_truth, num_subsamples, dataset.adj_mat)
+    print('Adjusting to get p(x|y) scores instead, returning those as actual performances')
+    probabilities = np.exp(preds.numpy())
+    avg_probs = probabilities.sum(axis=0)/probabilities.shape[0]
+    log_avg_probs = np.log(avg_probs)
+    new_prob_mat = preds - log_avg_probs.reshape(1, -1)
+    avg_corr = get_pairwise_rank_correlations(new_prob_mat)
+
+    print('Average rank correlation of prob mat with subtracted log p(y): ' + str(avg_corr))
+    aupr, correctness, sp, robustness_score = attribute_calculation(new_prob_mat, ground_truth, num_subsamples, dataset.adj_mat)
+
     print('AUPR: ' + str(aupr), flush=True)
     print('correctness: ' + str(correctness), flush=True)
     print('Specificity preference: ' + str(sp), flush=True)
@@ -359,7 +384,9 @@ if __name__ == '__main__':
     collate_fn = x.collate_fn
     model_kwargs = {'num_encoder_layers': args.num_encoder_layers, 'num_decoder_layers': args.num_decoder_layers, 
             'emb_size': emb_size, 'src_vocab_size': len(x.alphabet), 'tgt_vocab_size': len(x.vocab), 
-            'dim_feedforward': args.dim_feedforward, 'num_heads': args.num_heads, 'sigma': args.sigma, 'dropout': args.dropout, 'vocab': x.vocab, 'learning_rate': args.learning_rate, 'has_scheduler' : args.use_scheduler, 'label_smoothing': args.label_smoothing, 'oversmooth_param': args.oversmooth_param}
+            'dim_feedforward': args.dim_feedforward, 'num_heads': args.num_heads, 'sigma': args.sigma, 
+            'dropout': args.dropout, 'vocab': x.vocab, 'learning_rate': args.learning_rate, 'has_scheduler' : args.use_scheduler, 
+            'label_smoothing': args.label_smoothing, 'oversmooth_param': args.oversmooth_param, 'pool_op': args.pool_op}
     if args.model_to_load is None:
         print('Vocab size:' + str(len(x.vocab)), flush=True)
         '''
@@ -389,8 +416,6 @@ if __name__ == '__main__':
     no_val_loss = args.no_val_loss
     model_checkpoint_callback = ModelCheckpoint(monitor='val_loss', every_n_epochs=1, save_top_k=-1) # save model checkpoint after every epoch
     
-    
-    
     if no_early_stopping:
         trainer = Trainer(gpus=num_gpus, max_epochs=args.epochs, 
                 callbacks=[model_checkpoint_callback],
@@ -402,13 +427,9 @@ if __name__ == '__main__':
     if not args.load_model_predict:
         if args.load_train:
             print('Loading model for training: ' + args.model_to_load, flush=True)
+            print('Tuning with oversmoothing regularization: ' + str(args.oversmooth_param), flush=True)
+            model.oversmooth_param = args.oversmooth_param
             if old_model_load:
-                '''
-                model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
-                        emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-                        dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab, learning_rate=args.learning_rate,
-                    has_scheduler=args.use_scheduler)
-                '''
                 model = SeqSet2SeqTransformer(**model_kwargs)
                 ckpt = torch.load(args.model_to_load)
                 model.load_state_dict(ckpt['state_dict'])
@@ -429,12 +450,6 @@ if __name__ == '__main__':
     else:
         print('Loading model for predicting only: ' + args.model_to_load, flush=True)
         if old_model_load:
-            '''
-            model = SeqSet2SeqTransformer(num_encoder_layers=args.num_encoder_layers, num_decoder_layers=args.num_decoder_layers, 
-                    emb_size=emb_size, src_vocab_size=len(x.alphabet), tgt_vocab_size=len(x.vocab), 
-                    dim_feedforward=args.dim_feedforward, num_heads=args.num_heads, sigma=args.sigma, dropout=args.dropout, vocab=x.vocab, learning_rate=args.learning_rate,
-                    has_scheduler=args.use_scheduler)
-            '''
             model = SeqSet2SeqTransformer(**model_kwargs)
             ckpt = torch.load(args.load_model_predict)
             model.load_state_dict(ckpt['state_dict'])

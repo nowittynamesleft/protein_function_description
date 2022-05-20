@@ -14,6 +14,7 @@ def get_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('input_file', type=str, help='Fasta file to describe; if --annot_file flag is used it is assumed to be an annotation csv file with sequences, the same format that is used for training the model.')
     parser.add_argument('model_checkpoint', type=str, help='Model checkpoint used to generate descriptions')
+    parser.add_argument('--len_penalty', type=float, default=1.0, help='Length penalty for generation. Default 1, should be 0 for oversmooth regularized models')
     parser.add_argument('--save_prefix', type=str, default='no_save_prefix') 
     parser.add_argument('--annot_file', action='store_true', 
             help='Changes behavior to open the first argument')
@@ -44,6 +45,7 @@ def main(args):
     num_gpus = 1
     model = SeqSet2SeqTransformer.load_from_checkpoint(args.model_checkpoint)
     model.to('cuda:0')
+    model.len_penalty_param = args.len_penalty
     trainer = Trainer(gpus=num_gpus, logger=False)
     if not args.annot_file:
         fasta_description(args.input_file, trainer, model, args.save_prefix)

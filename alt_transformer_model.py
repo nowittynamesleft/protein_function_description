@@ -16,6 +16,7 @@ from torch.optim.lr_scheduler import CyclicLR
 from torch.nn import (TransformerEncoder, TransformerDecoder,
                       TransformerEncoderLayer, TransformerDecoderLayer)
 from analyze_preds import compute_oversmoothing_logratio
+from utils import gmean
 
 
 class PositionalEncoding(nn.Module):
@@ -97,13 +98,26 @@ class SeqSet2SeqTransformer(pl.LightningModule):
     def __init__(self, num_encoder_layers: int, num_decoder_layers: int,
                  emb_size: int, src_vocab_size: int, tgt_vocab_size: int,
                  dim_feedforward:int = 512, num_heads: int = 1, sigma:float = 1.0, dropout:float = 0.1, vocab=None, learning_rate=1e-3,
-                 has_scheduler=None, label_smoothing=0.0, oversmooth_param=0.0):
+                 has_scheduler=None, label_smoothing=0.0, oversmooth_param=0.0, len_penalty_param=1.0, pool_op='mean'):
         super(SeqSet2SeqTransformer, self).__init__()
+        '''
         encoder_layer = TransformerEncoderLayer(d_model=emb_size, nhead=num_heads,
-                                                dim_feedforward=dim_feedforward, batch_first=True)
+                                                dim_feedforward=dim_feedforward, 
+                                                dropout=dropout, batch_first=True)
+        '''
+        encoder_layer = TransformerEncoderLayer(d_model=emb_size, nhead=num_heads,
+                                                dim_feedforward=dim_feedforward,
+                                                batch_first=True)
+
         self.transformer_encoder = TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
-        decoder_layer = TransformerDecoderLayer(d_model=emb_size, nhead=num_heads,
-                                                dim_feedforward=dim_feedforward, batch_first=True)
+        '''
+        decoder_layer = TransformerDecoderLayer(d_model=emb_size, nhead=num_heads, 
+                                                dim_feedforward=dim_feedforward, 
+                                                dropout=dropout, batch_first=True)
+        '''
+        decoder_layer = TransformerDecoderLayer(d_model=emb_size, nhead=num_heads, 
+                                                dim_feedforward=dim_feedforward, 
+                                                batch_first=True)
         self.transformer_decoder = TransformerDecoder(decoder_layer, num_layers=num_decoder_layers)
         self.learning_rate = learning_rate
         self.generator = nn.Linear(emb_size, tgt_vocab_size)
@@ -112,6 +126,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         self.tgt_vocab_size = tgt_vocab_size
         self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout)
         self.emb_size = emb_size
+        self.len_penalty_param = len_penalty_param
         if label_smoothing != 0.0:
             print('Using label_smoothing ' + str(label_smoothing))
         self.loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing, ignore_index=0) # ignore padding in calculating loss; 0 is padding index
@@ -121,6 +136,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         self.pred_pair_probs = False
         self.has_scheduler = has_scheduler
         self.oversmooth_param = oversmooth_param
+        self.pool_op = pool_op
         if has_scheduler:
             print('Using scheduler, manual optimization.')
             self.automatic_optimization = False
@@ -190,12 +206,17 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         batch_size, seq_set_len, max_len = src.shape
         transformed_embeds = self.encode(src, src_padding_mask)
         # len convert expects src_padding_mask to be all positions that HAVE tokens, so it is inverted here:
+        if self.pool_op == 'gmean':
+            transformed_embeds = torch.sigmoid(transformed_embeds)
         transformed_embeds = transformed_embeds.reshape(batch_size*seq_set_len, max_len, -1)
         src_padding_mask = src_padding_mask.reshape(batch_size*seq_set_len, max_len)
         non_padded_max_lens = self._max_lens(src_padding_mask)
         len_trans_embeds, _ = self.len_convert(transformed_embeds, non_padded_max_lens, ~src_padding_mask.bool()) 
         len_trans_embeds = len_trans_embeds.reshape(batch_size, seq_set_len, int(non_padded_max_lens[0].item()), -1)
-        avg_src_transformed_embed = torch.mean(len_trans_embeds, dim=1)
+        if self.pool_op == 'mean':
+            avg_src_transformed_embed = torch.mean(len_trans_embeds, dim=1)
+        elif self.pool_op == 'gmean':
+            avg_src_transformed_embed = gmean(len_trans_embeds, dim=1)
         return avg_src_transformed_embed
 
 
@@ -266,7 +287,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         return False
 
 
-    def get_single_seq_set_desc_pair_logits(self, avg_src_transformed_embeds, actual_GO_padded, tgt_mask, GO_pad_mask, len_penalty=True):
+    def get_single_seq_set_desc_pair_logits(self, avg_src_transformed_embeds, actual_GO_padded, tgt_mask, GO_pad_mask):
         # given sequence set embedding and GO description, calculate probability model assigns to the sequence with length penalty
         # making this batchwise based on sequence sets, for a given GO term
         assert 'cuda' in str(self.device)
@@ -291,20 +312,19 @@ class SeqSet2SeqTransformer(pl.LightningModule):
             desc_log_prob = torch.sum(correct_token_log_probs, dim=-1)
             correct_token_log_probs = correct_token_log_probs.detach().cpu().numpy()
              
-            if len_penalty:
-                desc_log_prob = desc_log_prob/len(correct_tokens) # length penalty, no parameter for now
+            desc_log_prob = desc_log_prob/(len(correct_tokens)**self.len_penalty_param) # length penalty; if 0 then no length penalty
 
         return torch.tensor(desc_log_prob.detach().cpu()), correct_token_log_probs
 
 
-    def classify_seq_sets(self, S_padded, S_pad_mask, all_GO_padded, GO_pad_mask, len_penalty=True):
+    def classify_seq_sets(self, S_padded, S_pad_mask, all_GO_padded, GO_pad_mask):
         go_desc_logits = []
         all_desc_token_logits = []
         tgt_mask = create_target_masks(all_GO_padded[:, :-1], device=self.device) # create mask only for input
         embedding = self.encode_seq_set(S_padded.to(self.device), S_pad_mask.to(self.device))
         for go_ind in range(all_GO_padded.shape[0]):
             curr_GO_padded = all_GO_padded[go_ind].to(self.device)
-            desc_logits, desc_token_logits = self.get_single_seq_set_desc_pair_logits(embedding, curr_GO_padded.unsqueeze(0), tgt_mask.to(self.device), GO_pad_mask[go_ind].unsqueeze(0).to(self.device), len_penalty=len_penalty)
+            desc_logits, desc_token_logits = self.get_single_seq_set_desc_pair_logits(embedding, curr_GO_padded.unsqueeze(0), tgt_mask.to(self.device), GO_pad_mask[go_ind].unsqueeze(0).to(self.device))
             go_desc_logits.append(desc_logits)
             all_desc_token_logits.append(desc_token_logits)
 
@@ -318,7 +338,6 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         beam_width = 25
         start_symbol = 0
         end_symbol = self.tgt_vocab_size - 1
-        t = 1.0
         if len(pred_batch) == 4:
             S_padded, S_pad_mask, actual_GO_padded, actual_GO_pad_mask = pred_batch
         elif len(pred_batch) == 2:
@@ -359,7 +378,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                         prob = torch.softmax(prob.squeeze(), dim=-1)
                         curr_top_probs, curr_top_words = torch.topk(prob, beam_width, dim=-1, largest=True)
                         # Length penalty
-                        curr_log_probs.append((candidate_probs[beam] + torch.log(curr_top_probs))/(len(candidate_sentences[beam]))**t)
+                        curr_log_probs.append((candidate_probs[beam] + torch.log(curr_top_probs))/(len(candidate_sentences[beam])**self.len_penalty_param))
                         # No len penalty:
                         #curr_log_probs.append(candidate_probs[beam] + torch.log(curr_top_probs))
                         curr_words.append(curr_top_words)
@@ -386,7 +405,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                     assert selected_candidate[-1] != end_symbol
                     new_candidate_sentence = torch.cat([selected_candidate, second_word.unsqueeze(0)])
                     new_candidate_sentences.append(new_candidate_sentence)
-                    new_candidate_probs.append(unended_top_probs[first_word_beam_ind]*(len(new_candidate_sentence))**t)
+                    new_candidate_probs.append(unended_top_probs[first_word_beam_ind]*(len(new_candidate_sentence)**self.len_penalty_param))
                     # No length penalty:
                     #new_candidate_probs.append(unended_top_probs[first_word_beam_ind])
                 
@@ -405,7 +424,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                         break
                     elif sent_ind == len(candidate_sentences) - 1: # if it reached the end without breaking, all candidates end with <EOS>
                         all_candidates_ended = True
-                        candidate_probs = torch.Tensor([candidate_probs[i]/(len(candidate_sentences[i])**t) for i in range(len(candidate_probs))])
+                        candidate_probs = torch.Tensor([candidate_probs[i]/(len(candidate_sentences[i])**self.len_penalty_param) for i in range(len(candidate_probs))])
                         # No len penalty:
                         #candidate_probs = torch.Tensor([candidate_probs[i]) for i in range(len(candidate_probs))])
             candidate_sentences = [sent for _, sent in sorted(zip(candidate_probs, candidate_sentences), key=lambda pair: pair[0], reverse=True)]
