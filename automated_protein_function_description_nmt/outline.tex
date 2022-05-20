@@ -156,18 +156,33 @@ Training proteins with training GO terms, test proteins with training GO terms, 
 	\label{tab:table}
 \end{table}
 \begin{table}
-	\caption{Description Generation}
+	\caption{Sample Test Set Description Generations}
 	\centering
-    \begin{tabular}{p{7.5 cm}|p{7.5 cm}}
+    \begin{tabular}{p{8 cm}|p{8 cm}}
 		\toprule
-        True GO Description & Generated Description \\
+        True Common GO Description of Sequence Set & Model Generated Description of Sequence Set \\
 		\midrule
-        binding to fructose 6-phosphate . & catalysis of the reaction sinapaldehyde + nadph = nadp+ = h+ . \\ \hline
-        catalysis of the reaction n6- ( 1 , 2-dicarboxyethyl ) amp = fumarate + amp . & catalysis of the reaction 2-deoxy-d-ribose 5-phosphate = d-glyceraldehyde 3-phosphate + acetaldehyde + acetaldehyde + acetaldehyde ... \\ \hline
-		the chemical reactions and pathways involving of salicylic acid ( 2-hydroxybenzoic acid ) , a derivative of benzoic acid . & the chemical reactions and pathways resulting in the formation of asparagine , the fundamental heterocyclic group of asparagine , from simpler precursors , the formation of the formation of the formation of the formation of the multisubunit water-soluble proteins , the formation of the multisubunit water-soluble proteins , the multisubunit water-soluble proteins , the multisubunit water-soluble proteins , the formation of the formation of the formation ... \\
+        <SOS> the process in which the anatomical structures of appendages are generated and organized . an appendage is an organ or part that is attached to the trunk of an organism . <EOS> & <SOS> the process whose specific outcome is the progression of the eye over time , from its formation to the mature structure . <EOS> \\ \hline
+        <SOS> any process that activates or increases the frequency , rate or extent of cell differentiation . <EOS> & <SOS> any process that modulates the frequency , rate or extent of cell differentiation . <EOS> \\ \hline
+		<SOS> a protein complex that contains the gins complex , cdc45p , and the heterohexameric mcm complex , and that is involved in unwinding dna during replication . <EOS> & <SOS> any process involved in forming the mature 3 ' end of a dna ( mrna ) molecule . <EOS> \\
+        \hline
+        <SOS> the targeting and directed movement of proteins into a cell or organelle . not all import involves an initial targeting event . <EOS> & <SOS> the directed movement of proteins from endoplasmic reticulum to the nucleus . <EOS>  \\
 		\bottomrule
 	\end{tabular}
 \end{table}
+%\begin{table}
+%	\caption{Description Generation}
+%	\centering
+%    \begin{tabular}{p{7.5 cm}|p{7.5 cm}}
+%		\toprule
+%        True GO Description & Generated Description \\
+%		\midrule
+%        binding to fructose 6-phosphate . & catalysis of the reaction sinapaldehyde + nadph = nadp+ = h+ . \\ \hline
+%        catalysis of the reaction n6- ( 1 , 2-dicarboxyethyl ) amp = fumarate + amp . & catalysis of the reaction 2-deoxy-d-ribose 5-phosphate = d-glyceraldehyde 3-phosphate + acetaldehyde + acetaldehyde + acetaldehyde ... \\ \hline
+%		the chemical reactions and pathways involving of salicylic acid ( 2-hydroxybenzoic acid ) , a derivative of benzoic acid . & the chemical reactions and pathways resulting in the formation of asparagine , the fundamental heterocyclic group of asparagine , from simpler precursors , the formation of the formation of the formation of the formation of the multisubunit water-soluble proteins , the formation of the multisubunit water-soluble proteins , the multisubunit water-soluble proteins , the multisubunit water-soluble proteins , the formation of the formation of the formation ... \\
+%		\bottomrule
+%	\end{tabular}
+%\end{table}
 
 \end{enumerate}
 
