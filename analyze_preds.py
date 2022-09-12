@@ -8,9 +8,6 @@ from utils import annotation_correctness, specificity_preference, annotation_rob
 import argparse
 
 
-#TODO: need to have a function that takes in a model and zero-shot predictions 
-# and returns the logits for the predicted GO terms.
-
 def arguments():
     args = argparse.ArgumentParser()
     args.add_argument('annot_seq_file', type=str, help='Annotation dataset corresponding to prediction files')
@@ -29,10 +26,11 @@ def compute_oversmoothing_logratio(logits, target, non_pad_mask, eos_idx, margin
 
     # reverse cumsum fast workaround, this makes approximation error for suffix_lprob[:,-1]
     # in other words, after this operation the smallest suffix of one token does not equal eaxctly to that
-    # true eos_probability. So it is better to exlcude those positions from OSL since theoretically loss there is 0.
+    # true eos_probability. So it is better to exclude those positions from OSL since theoretically loss there is 0.
     target_lprobs_withoutpad = (target_lprobs * non_pad_mask).squeeze(-1)
     suffix_lprob = target_lprobs_withoutpad + torch.sum(target_lprobs_withoutpad, dim=-1, keepdims=True) - torch.cumsum(target_lprobs_withoutpad, dim=-1)
     
+    #import ipdb; ipdb.set_trace()
     eos_lprobs = full_lprobs[:,:,eos_idx] * non_pad_mask.squeeze(-1)
 
     oversmoothing_loss = torch.maximum(eos_lprobs - suffix_lprob + margin, torch.zeros_like(suffix_lprob))
@@ -46,8 +44,9 @@ def compute_oversmoothing_logratio(logits, target, non_pad_mask, eos_idx, margin
 
         num_osr_per_seq = non_pad_mask.squeeze(-1).sum(-1) - 1  # exclude the <eos> from each seq count
         osr = oversmoothed.sum(-1) / num_osr_per_seq # compute oversmoothing per sequence
+        avg_osr = osr.mean()
 
-    return oversmoothing_loss, osr
+    return oversmoothing_loss, avg_osr
 
 
 def tokenization_to_description(tokenized_desc): # assume @@ is BPE separator
