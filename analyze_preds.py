@@ -87,7 +87,7 @@ def attribute_calculation(prob_mat, correct_go_mask, n, go_adj_mat):
     
     return aupr, correctness, sp, robustness_score
 
-def get_attributes(pred_fname, go_adj_mat, n, go_term_mask=None, no_input_file=None, with_adjustment=True):
+def get_attributes(pred_fname, go_adj_mat, n, go_term_mask=None, no_input_file=None, freq_adj_param=1.0, annot_sums=None):
     pred_dict = pickle.load(open(pred_fname, 'rb'))
     if no_input_file is not None:
         score_dict = pickle.load(open(no_input_file, 'rb'))
@@ -116,20 +116,28 @@ def get_attributes(pred_fname, go_adj_mat, n, go_term_mask=None, no_input_file=N
     else:
         print('No filtered subset of GO terms')
         prob_mat = pred_dict['all_term_preds']
-    avg_corr = get_pairwise_rank_correlations(prob_mat)
-    print('Average rank correlation: ' + str(avg_corr))
-    aupr, correctness, sp, robustness_score = attribute_calculation(prob_mat, correct_go_mask, n, go_adj_mat)
+    #avg_corr = get_pairwise_rank_correlations(prob_mat)
+    #print('Average rank correlation: ' + str(avg_corr))
+    #aupr, correctness, sp, robustness_score = attribute_calculation(prob_mat, correct_go_mask, n, go_adj_mat)
 
-    if with_adjustment:
-        print('Adjusting to get p(x|y) scores instead, returning those as actual performances')
-        probabilities = np.exp(prob_mat.numpy())
-        avg_probs = probabilities.sum(axis=0)/probabilities.shape[0]
-        log_avg_probs = np.log(avg_probs)
-        new_prob_mat = prob_mat - log_avg_probs.reshape(1, -1)
-        avg_corr = get_pairwise_rank_correlations(new_prob_mat)
+    if annot_sums is not None:
+        print('Naive method based on just the frequency of this dataset:')
+        #return attribute_calculation(torch.tensor(correct_go_mask.sum(axis=0)).repeat(correct_go_mask.shape[0], 1), correct_go_mask, n, go_adj_mat)
+        return attribute_calculation(torch.tensor(annot_sums).repeat(correct_go_mask.shape[0], 1), correct_go_mask, n, go_adj_mat)
 
-        print('Average rank correlation of prob mat with subtracted log p(y): ' + str(avg_corr))
-        aupr, correctness, sp, robustness_score = attribute_calculation(new_prob_mat, correct_go_mask, n, go_adj_mat)
+    if freq_adj_param != 0:
+        print('Adjusting to get p(x|y) scores with adjustment parameter ' + str(freq_adj_param) + ', returning those as actual performances')
+    else:
+        print('No frequency adjustment')
+
+    probabilities = np.exp(prob_mat.numpy())
+    avg_probs = probabilities.sum(axis=0)/probabilities.shape[0]
+    log_avg_probs = np.log(avg_probs)
+    new_prob_mat = prob_mat - freq_adj_param*log_avg_probs.reshape(1, -1)
+    avg_corr = get_pairwise_rank_correlations(new_prob_mat)
+
+    print('Average rank correlation of prob mat with subtracted log p(y): ' + str(avg_corr))
+    aupr, correctness, sp, robustness_score = attribute_calculation(new_prob_mat, correct_go_mask, n, go_adj_mat)
 
     if no_input_file is not None:
         no_input_adjusted_prob_mat = prob_mat - desc_background_log_probs.reshape(1, -1)
@@ -140,7 +148,7 @@ def get_attributes(pred_fname, go_adj_mat, n, go_term_mask=None, no_input_file=N
     print('\n')
     return aupr, correctness, sp, robustness_score
 
-def pred_list_attributes(pred_fnames, go_adj_mat, go_term_mask=None, num_subsamples=4, no_input_files=None):
+def pred_list_attributes(pred_fnames, go_adj_mat, go_term_mask=None, num_subsamples=4, no_input_files=None, annot_sums=None):
     auprs = []
     correctness_scores = []
     sps = []
@@ -152,7 +160,12 @@ def pred_list_attributes(pred_fnames, go_adj_mat, go_term_mask=None, num_subsamp
         else:
             no_input_file = None
         print(fname)
-        aupr, correctness, sp, robustness_score = get_attributes(fname, go_adj_mat, num_subsamples, go_term_mask=go_term_mask, no_input_file=no_input_file) 
+        freq_adj_params = np.arange(0.8, 2, step=0.1)
+        print('naive perfs')
+        aupr, correctness, sp, robustness_score = get_attributes(fname, go_adj_mat, num_subsamples, go_term_mask=go_term_mask, no_input_file=no_input_file, freq_adj_param=0.0, annot_sums=annot_sums)
+        print('perfs iterating through different frequency adjustment params')
+        for freq_adj_param in freq_adj_params:
+            aupr, correctness, sp, robustness_score = get_attributes(fname, go_adj_mat, num_subsamples, go_term_mask=go_term_mask, no_input_file=no_input_file, freq_adj_param=freq_adj_param)
         auprs.append(aupr)
         correctness_scores.append(correctness)
         sps.append(sp)
@@ -185,4 +198,4 @@ if __name__ == '__main__':
         print(np.array(dataset.go_descriptions)[considered_terms_mask][np.argmax(annot_sums[considered_terms_mask])])
         pred_list_attributes(pred_fnames, go_adj_mat, go_term_mask=considered_terms_mask, num_subsamples=num_subsamples, no_input_files=no_input_fnames)
     else:
-        pred_list_attributes(pred_fnames, go_adj_mat, num_subsamples=num_subsamples, no_input_files=no_input_fnames)
+        pred_list_attributes(pred_fnames, go_adj_mat, num_subsamples=num_subsamples, no_input_files=no_input_fnames, annot_sums=annot_sums)
