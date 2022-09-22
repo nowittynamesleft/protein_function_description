@@ -105,8 +105,7 @@ Finally, we show generated function descriptions compared to ground truth descri
     Much focus has been placed on this framing. 
 	The Critical Assessment of Functional Annotation \citep{CAFA3} serves as the main community benchmark for protein function prediction, and drives the field to improve upon previous methods.
 	%The community submits new methods to annotate unlabeled proteins whose functional annotations are held out. 
-	The CAFA evaluation datasets consider proteins that can described by existing categories.
-    Yet many unlabeled proteins, especially in understudied organisms, are likely to perform functions that have not been seen before.
+	The CAFA evaluation datasets consider proteins that can described by existing categories, yet many unlabeled proteins, especially in understudied organisms, are likely to perform functions that have not been seen before.
     The supervised approach does not address this possibility, and so new methods must be proposed for function discovery.
 	\subsection{Clustering}
     Flat clustering-based approaches, by themselves, are not able to give much information about the new functional categories that they predict.
@@ -133,7 +132,7 @@ Finally, we show generated function descriptions compared to ground truth descri
     Neural machine translation (NMT) is the automatic translation of written text from one natural language to another directly using neural networks \cite{cho2014properties}. NMT models have been widely deployed in production translation systems and show promise in domains other than natural language.
     Recently, a method called ProTranslator \citep{ProTranslator} has been proposed, which uses sequence, network and text description information concatenated into a 1-D feature vector in order to perform zero-shot classification on Gene Ontology terms.
     The authors also show that they are able to generate accurate and detailed descriptions for a set of proteins using a separate transformer model with this feature representation.
-    Compared to our proposed method, we do not use any additional information to produce descriptions besides a set of protein sequences, and our model is trained directly to generate descriptions without pooling and losing positional information over the input sequences.
+    Compared to ProTranslator, our method does not use any additional information to produce descriptions besides a set of protein sequences, and our model is trained directly to generate descriptions without pooling and losing positional information over the input sequences.
 
 \section{Methods}
 \begin{figure}
@@ -143,7 +142,7 @@ Finally, we show generated function descriptions compared to ground truth descri
 The model is trained to produce the most specific common function of the input protein sequences.}
     \label{overview}
 \end{figure}
-In the following subsections, we describe the motivation and formulations of the novel aspects of our method. Figure \ref{overview} contains a high-level overview of the method.
+The following subsections give the motivation and formulations of the components of our method. Figure \ref{overview} contains a high-level overview.
 
         %Explicitly ontology-based zero-shot approaches such as DeepGOZero \citep{DeepGOZero} and clusDCA \cite{clusDCA} do not allow for actual description of a new function that is discovered.
         %    The only information that is gained is that the protein has a new function that has some specified ontological relation to currently known functions.
@@ -156,26 +155,25 @@ In the following subsections, we describe the motivation and formulations of the
     %Having a set of sequences as input is a more general framing that matches the way the GO terms themselves were created. % back this statement up a bit, probably from GO paper
     Biologists describe and categorize functions as abstractions of the common activity of a group of proteins, so we want our model to be able to perform this abstraction in a similar way.
     Formulating the problem as finding a single functional description for a single protein at a time is ill-defined, since a protein may have more than one function \cite{jeffery2018protein}.
-    Our task, then, is to describe the most specific function that is common to a set of any number of proteins. 
-    Let us consider a set of protein sequences $s \in S$, invariant to ordering, as input to the model that generates a description $\hat{d}_{S}$.
+    Let us consider a set of protein sequences $s \in S$, invariant to ordering, as input to our model.
+    Our task, then, is to find a description $d_{S}$ which corresponds to the most specific function that is common to all protein sequences $s \in S$.
 
     \subsection{Transformer encoder-decoder model with length transform}
     We use a transformer encoder-decoder model \citep{vaswani2017attention} with a length transform to handle differing sequence lengths in order to average sequence features from the encoder. 
-    For each sequence $s \in S$ we use a transformer model with self-attention to obtain a representation $h_{s}$ which consists of $|s|$ continuous-valued vectors. 
-    As described in \cite{shu2020latent}, the length transform takes the input $h_{s}$ of length $|s|$ and transforms the sequence with a monotonic location-based attention into a representation $h^{max}_{s}$ with the maximum length of the sequence set $max_{s \in S}|s|$. 
-    The model takes sequences of varying length. The sequences' representations should be combined in some way that preserves the amino acid ordering. We use the length transform in order to shape the representations such that they can be combined while order information is preserved.
+    The sequences' representations should be combined in some way that preserves the amino acid ordering, so we use the length transform in order to shape the representations such that they can be combined while order information is preserved.
+    For each sequence $s \in S$, we use a transformer model with positional encoding and self-attention to obtain a representation $h_{s}$ which consists of $|s|$ continuous-valued vectors. 
+    As described in \cite{shu2020latent}, the length transform takes the input $h_{s}$ of length $|s|$ and transforms the sequence with a monotonic location-based attention into a representation $h^{max}_{s}$ such that $|h^{max}_{s}| = max_{s \in S}|s|$. 
     
     \subsection{Autoregressive generation of descriptions}
-    We want to be able to describe proteins in a compositional way, so that we have the ability to describe any set of proteins given to the model. To do this, we generate protein function descriptions in natural language, which gives the model the capability to describe a new function rather than having to rely on specific examples of that function.
-
-     This allows for the characterization of proteins in a compositional way, with a grammar such that all protein sets can be described with the model, not just those with particular sets of terms the scientific community has manually assigned with the Gene Ontology. 
+    It is desirable to represent protein function in a compositional way, so that the model has the ability to describe any given set of proteins. To do this, we generate protein function descriptions in natural language, which gives the model the capability to describe a new function rather than having to rely on training examples of that function. We predict the tokens autoregressively, which is a standard practice in the NMT literature of top performing methods.
+    With the $|S|$ sequence representations $h^{max}_{s}$ having all the same length after the length transform, we are able to take the average of these abstract representations, giving us $h_{S}$, the representation of the sequence set. We use this representation in the transformer decoder in order to predict the next token of the description given all the previous tokens.
 
     \subsection{Zero-shot Classification setting}
 Fundamentally, our model assigns probabilities to pairs of protein sets and descriptions. In order to evaluate the method, we use the zero-shot classification setting, where we wish to classify proteins into unseen categories. We develop three metrics in the Evaluation section to evaluate the conditional probability distribution $P(d_{S}|S)$ learned by the model in this classification setting.
 
     \subsection{Generation (beam search)}
-    Generation of descriptions is a search problem through the set of all possible output token sequences, where the goal is to find the sequence with the largest probability. Generation given an autoregressive model is a highly studied problem in the natural language processing literature.% cite a review paper on language model generation methods
-    We use beam search in the current implementation in order to find reasonable generated descriptions. Evaluation of these descriptions is an unsolved problem; currently, manual inspection by expert human evaluators is the best method we have.
+    Generation of descriptions is a search problem through the set of all possible output token sequences, where the goal is to find the sequence with the largest probability. Generation given an autoregressive model is a highly studied problem in the natural language processing literature.
+    We use beam search \cite{graves2012sequence} in the current implementation in order to find reasonable generated descriptions. We use a beam width of 25 with a length penalty of 1.0. Direct evaluation of these descriptions is an unsolved problem: currently, manual inspection by expert human evaluators is the best method we have.
 
 \section{Evaluation}
 In this section, we define three metrics that can be computed using known functional descriptions in order to evaluate our models' learned probability distributions.
@@ -228,6 +226,7 @@ We take sequences and annotations from the Uniprot-KB Swiss-Prot database, which
 This database had 566,996 proteins total. 
 To show that our model can generalize to non-homologous proteins, we clustered the proteins into groupings with less than 30\% sequence identity, and separated these into training and test sets. 
 To focus on the functions that were both specific enough and had a sufficient number of examples in our evaluation sets, we restricted the maximum number of proteins per GO term to 1280, and minimum number of proteins to 32. 
+Hyperparameters chosen were tuned on the training set proteins with training function descriptions.
 The number of proteins and GO terms that were used after these restrictions in our training set and evaluation sets are listed in Table \ref{tab:datasets}.
 \begin{table}
     \caption{Number of proteins and GO terms in training and test sets.}
@@ -247,9 +246,9 @@ The number of proteins and GO terms that were used after these restrictions in o
 
         We show model performances in Table \ref{tab:performances}. The table suggests that the model is able to rank unseen functions for protein sets that it has been exposed to in training, with the model's rankings of identically annotated sets being in moderate agreement. For test proteins that have less than 30\% sequence identity to the training set, the model is still able to assign rankings of 1000 randomly selected functions from the training set with a correctness 30\% above random assignment (0.5). For the low-similarity test proteins that have functions that are not seen in the training set, the model is still able to rank 21\% better than random rankings.
 
-        Although the performance is not very high compared to most protein function prediction methods for unseen proteins, we are mainly focused on using the model for generation, and these metrics are meant mostly as guides for model design. The loss function used is not optimizing for classification accuracy; it is optimizing the model's probability distribution to assign high probability to descriptions assigned to a sequence set.
+        We are mainly focused on using the model for generation, and these metrics are meant mostly as guides for model design. The loss function used is not optimizing for classification accuracy; it is optimizing the model's probability distribution to assign high probability to descriptions assigned to a sequence set.
 
-        We show sample test set descriptions in Table \ref{tab:descriptions}. The left column is a GO description that annotates a sampled sequence set and the right column is the models' generated description of that sequence set. The first row shows that the model describes verbatim a related term (GO:0001654, eye development) for the proteins selected. Their common ancestor term is anatomical structure development (GO:0048856). This description is more specific than the actual term from which the proteins are sampled, but the description is wrong. The next generated description is more general than the actual description of the sampled set (modulates vs. activates), but is correct; it is the direct parent of the true term. The third generated description is related but ultimately different than the actual description of the protein set. The fourth generated description is more specific than the true common GO description of the set, and happens to be the description of a descendant term of the ground truth.
+        We show sample test set descriptions in Table \ref{tab:descriptions}. The first row shows that the model describes verbatim a related term (GO:0001654, eye development) for the proteins selected, whereas the true term is appendage development (GO:0048736). Their common ancestor term is anatomical structure development (GO:0048856). This description is more specific than the actual term from which the proteins are sampled, but it is not accurate. The next generated description is more general than the actual description of the sampled set (modulates vs. activates), but is correct; it is the direct parent of the true term. The third generated description is related but ultimately different than the actual description of the protein set. The fourth generated description is more specific than both the true common GO description of the set (protein import, GO:0017038) and the generated description's closest known GO term, protein exit from endoplasmic reticulum (GO:0032527). It is describing protein import into the nucleus from the endoplasmic reticulum, which is not currently a GO term, but if it was, it would be a descendant of both of these terms.
 \begin{table}
 	\caption{Model Performances}
 	\centering
@@ -267,15 +266,15 @@ The number of proteins and GO terms that were used after these restrictions in o
 \begin{table}
 	\caption{Sample Test Set Description Generations}
 	\centering
-    \begin{tabular}{p{8 cm}|p{8 cm}}
+    \begin{tabular}{p{2 cm}|p{5 cm}|p{5 cm}|p{2 cm}}
 		\toprule
-        True Common GO Description of Sequence Set & Model Generated Description of Sequence Set \\
+        True Common GO Term & True Common GO Description of Sequence Set & Model Generated Description of Sequence Set & Closest Known GO Term to Generated Description\\
 		\midrule
-        <SOS> the process in which the anatomical structures of appendages are generated and organized . an appendage is an organ or part that is attached to the trunk of an organism . <EOS> & <SOS> the process whose specific outcome is the progression of the eye over time , from its formation to the mature structure . <EOS> \\ \hline
-        <SOS> any process that activates or increases the frequency , rate or extent of cell differentiation . <EOS> & <SOS> any process that modulates the frequency , rate or extent of cell differentiation . <EOS> \\ \hline
-		<SOS> a protein complex that contains the gins complex , cdc45p , and the heterohexameric mcm complex , and that is involved in unwinding dna during replication . <EOS> & <SOS> any process involved in forming the mature 3 ' end of a dna ( mrna ) molecule . <EOS> \\
+        GO:0048736, appendage development & <SOS> the process in which the anatomical structures of appendages are generated and organized . an appendage is an organ or part that is attached to the trunk of an organism . <EOS> & <SOS> the process whose specific outcome is the progression of the eye over time , from its formation to the mature structure . <EOS> & GO:0001654, eye development \\ \hline
+        GO:0045597, positive regulation of cell differentiation & <SOS> any process that activates or increases the frequency , rate or extent of cell differentiation . <EOS> & <SOS> any process that modulates the frequency , rate or extent of cell differentiation . <EOS> & GO:0045595, regulation of cell differentiation  \\ \hline
+        GO:0071162, CMG complex & <SOS> a protein complex that contains the gins complex , cdc45p , and the heterohexameric mcm complex , and that is involved in unwinding dna during replication . <EOS> & <SOS> any process involved in forming the mature 3 ' end of a dna ( mrna ) molecule . <EOS> & GO:0031124, mRNA 3'-end processing \\
         \hline
-        <SOS> the targeting and directed movement of proteins into a cell or organelle . not all import involves an initial targeting event . <EOS> & <SOS> the directed movement of proteins from endoplasmic reticulum to the nucleus . <EOS>  \\
+        GO:0017038, protein import & <SOS> the targeting and directed movement of proteins into a cell or organelle . not all import involves an initial targeting event . <EOS> & <SOS> the directed movement of proteins from endoplasmic reticulum to the nucleus . <EOS> & GO:0032527, protein exit from endoplasmic reticulum \\
 		\bottomrule
 	\end{tabular}
     \label{tab:descriptions}
