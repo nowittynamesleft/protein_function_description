@@ -153,6 +153,7 @@ def pred_list_attributes(pred_fnames, go_adj_mat, go_term_mask=None, num_subsamp
     correctness_scores = []
     sps = []
     robustness_scores = []
+    import ipdb; ipdb.set_trace()
     for i in range(len(pred_fnames)):
         fname = pred_fnames[i] 
         if no_input_files is not None:
@@ -160,12 +161,13 @@ def pred_list_attributes(pred_fnames, go_adj_mat, go_term_mask=None, num_subsamp
         else:
             no_input_file = None
         print(fname)
-        freq_adj_params = np.arange(0.8, 2, step=0.1)
+        #freq_adj_params = np.arange(0.8, 2, step=0.1)
         print('naive perfs')
         aupr, correctness, sp, robustness_score = get_attributes(fname, go_adj_mat, num_subsamples, go_term_mask=go_term_mask, no_input_file=no_input_file, freq_adj_param=0.0, annot_sums=annot_sums)
         print('perfs iterating through different frequency adjustment params')
-        for freq_adj_param in freq_adj_params:
-            aupr, correctness, sp, robustness_score = get_attributes(fname, go_adj_mat, num_subsamples, go_term_mask=go_term_mask, no_input_file=no_input_file, freq_adj_param=freq_adj_param)
+        #for freq_adj_param in freq_adj_params:
+        #    aupr, correctness, sp, robustness_score = get_attributes(fname, go_adj_mat, num_subsamples, go_term_mask=go_term_mask, no_input_file=no_input_file, freq_adj_param=freq_adj_param)
+        aupr, correctness, sp, robustness_score = get_attributes(fname, go_adj_mat, num_subsamples, go_term_mask=go_term_mask, no_input_file=no_input_file, freq_adj_param=1.0)
         auprs.append(aupr)
         correctness_scores.append(correctness)
         sps.append(sp)
@@ -188,9 +190,11 @@ if __name__ == '__main__':
     print('Most annotated go term has ' + str(max(annot_sums)))
     print('Min annotated go term has ' + str(min(annot_sums)))
     min_examples = 0
+    #min_examples = 32
+    #max_examples = 1280
     print('Cutoff chosen: ' + str(min_examples))
     if min_examples > 0:
-        considered_terms_mask = (annot_sums > min_examples)
+        considered_terms_mask = (annot_sums > min_examples) & (annot_sums < max_examples)
         print('Min annotated go term considered for metrics has ' + str(min(annot_sums[considered_terms_mask])))
         print('Description associated with least annotated term that is considered: ')
         print(np.array(dataset.go_descriptions)[considered_terms_mask][np.argmin(annot_sums[considered_terms_mask])])

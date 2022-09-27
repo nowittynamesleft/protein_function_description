@@ -193,6 +193,7 @@ def predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset,
     go_terms = []
     go_names = []
     go_descs = []
+    prot_id_sets_list = []
     for i in range(len(test_dataset)):
         try:
             (prot_id_sets, seq_sets, common_terms, _, _) = test_dataset.get_identically_annotated_subsamples(i, 1, verbose=0)
@@ -202,18 +203,21 @@ def predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset,
         candidate_sentences, candidate_probs = model.beam_search([S_padded.to(model.device), S_mask.to(model.device)])
         top_candidate = candidate_sentences[0][0]
         top_prob = candidate_probs[0][0]
+        print('Protein set:')
+        print(prot_id_sets[0])
+        print('Common terms', flush=True)
+        print(common_terms, flush=True)
+        print('Ground_truth', flush=True)
+        print(test_dataset.go_desc_strings[i], flush=True)
         print('Top candidate', flush=True)
         print(top_candidate, flush=True)
         preds.append(top_candidate)
         probs.append(top_prob)
-        print('Common terms', flush=True)
-        print(common_terms, flush=True)
         common_term_sets.append(common_terms)
         go_terms.append(test_dataset.go_terms[i])
         go_names.append(test_dataset.go_names[i])
-        print('Ground_truth', flush=True)
-        print(test_dataset.go_desc_strings[i], flush=True)
         go_descs.append(test_dataset.go_descriptions[i])
+        prot_id_sets_list.append(prot_id_sets[0])
 
     # pred_output shape: num_batches * 2 (preds, probs) * beam_width * lengths of outputs
     #preds = [candidate_preds[0] for batch in pred_output for candidate_preds in batch[0]]
@@ -222,6 +226,7 @@ def predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset,
     outfile = open('description_predictions/' + save_prefix + '_subsample_prot_preds.txt', 'w')
     for i in range(len(preds)):
         outfile.write('GO term: ' + go_terms[i] + ': ' + go_names[i] + '\n')
+        outfile.write('Protein set: ' + ', '.join(prot_id_sets_list[i]) + '\n')
         outfile.write('Prediction:\n')
         outfile.write(' '.join(word_preds[i]) + '\n')
         outfile.write('Probability score:\t' + str(torch.exp(probs[i]).item()) + '\n')
