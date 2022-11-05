@@ -336,6 +336,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         print('device:' + str(self.device))
         assert 'cuda' in str(self.device)
         beam_width = 25
+        #beam_width = 10
         start_symbol = 0
         end_symbol = self.tgt_vocab_size - 1
         if len(pred_batch) == 4:

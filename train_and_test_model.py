@@ -218,6 +218,7 @@ def predict_subsample_prots_go_term_descs(trainer, model, test_dl, test_dataset,
         go_names.append(test_dataset.go_names[i])
         go_descs.append(test_dataset.go_descriptions[i])
         prot_id_sets_list.append(prot_id_sets[0])
+        print(str(i) + ' out of ' + str(len(test_dataset)) + ' descriptions generated.')
 
     # pred_output shape: num_batches * 2 (preds, probs) * beam_width * lengths of outputs
     #preds = [candidate_preds[0] for batch in pred_output for candidate_preds in batch[0]]
