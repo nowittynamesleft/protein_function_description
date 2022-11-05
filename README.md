@@ -1,4 +1,4 @@
-This is a repository for code for the protein function description method, described in the paper [Automated Protein Function Description for Novel Class Discovery](https://www.biorxiv.org/content/10.1101/2022.10.13.512154v1).
+This is a repository for code for the method described in the paper [Automated Protein Function Description for Novel Class Discovery](https://www.biorxiv.org/content/10.1101/2022.10.13.512154v1).
 
 Citation information (biorxiv):
 
