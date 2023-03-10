@@ -414,7 +414,9 @@ class SeqSet2SeqTransformer(pl.LightningModule):
                 all_probs = torch.cat((torch.Tensor(new_candidate_probs), torch.Tensor(log_probs_ended)))
                 all_candidates = new_candidate_sentences + candidates_ended
                 top_probs, top_candidate_inds = torch.topk(all_probs.flatten(), beam_width, dim=-1, largest=True)
-                candidate_sentences = (np.array(all_candidates, dtype=object)[top_candidate_inds.numpy()]).tolist()
+                #import ipdb; ipdb.set_trace()
+                #candidate_sentences = (np.array(all_candidates, dtype=object)[top_candidate_inds.numpy()]).tolist()
+                candidate_sentences = [all_candidates[i] for i in top_candidate_inds]
                 candidate_probs = top_probs
 
                 has_duplicates = self.detect_description_duplicates(self.convert_batch_preds_to_words(candidate_sentences))
