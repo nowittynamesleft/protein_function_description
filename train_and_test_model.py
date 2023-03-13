@@ -106,11 +106,11 @@ def convert_sample_preds_to_words(predictions, vocab):
     return word_preds
 
 
-def get_prot_preds(fasta_file, trainer, model, combined=False):
-    seq_dataset = SequenceDataset(fasta_file)
+def get_prot_preds(fasta_file, trainer, model, combined=False, seq_set_size=1):
+    seq_dataset = SequenceDataset(fasta_file, num_samples=seq_set_size)
     if not combined:
         # get invididual protein preds
-        dl = DataLoader(seq_dataset, batch_size=32, collate_fn=partial(seq_go_collate_pad, seq_set_size=1), pin_memory=True)
+        dl = DataLoader(seq_dataset, batch_size=1, collate_fn=partial(seq_go_collate_pad, seq_set_size=seq_set_size), pin_memory=True)
         preds, probs = trainer.predict(model, dl)
     else:
         print('Producing a single combined prediction for all proteins in the following fasta file: ' + fasta_file)

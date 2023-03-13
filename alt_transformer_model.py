@@ -335,8 +335,8 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         print('Beam search')
         print('device:' + str(self.device))
         assert 'cuda' in str(self.device)
-        beam_width = 25
-        #beam_width = 10
+        #beam_width = 25
+        beam_width = 10
         start_symbol = 0
         end_symbol = self.tgt_vocab_size - 1
         if len(pred_batch) == 4:
@@ -350,7 +350,6 @@ class SeqSet2SeqTransformer(pl.LightningModule):
         all_final_candidate_probs = []
 
         for seq_set_ind in range(num_sets):
-            #import ipdb; ipdb.set_trace()
             embedding = self.encode_seq_set(S_padded[seq_set_ind, ...].unsqueeze(0), S_pad_mask[seq_set_ind, ...].unsqueeze(0))
 
             curr_GO_padded = GO_padded[seq_set_ind]

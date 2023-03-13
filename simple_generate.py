@@ -16,14 +16,19 @@ def get_arguments():
     parser.add_argument('model_checkpoint', type=str, help='Model checkpoint used to generate descriptions')
     parser.add_argument('--len_penalty', type=float, default=1.0, help='Length penalty for generation. Default 1, should be 0 for oversmooth regularized models')
     parser.add_argument('--save_prefix', type=str, default='no_save_prefix') 
+    parser.add_argument('--multisample', type=int, default=1) 
+    parser.add_argument('--subsample_num', type=int, default=32, help='Number of sequences to subsample from fasta file at a time for generating a description') 
     parser.add_argument('--annot_file', action='store_true', 
             help='Changes behavior to open the first argument')
     args = parser.parse_args()
     print(args)
     return args
 
-def fasta_description(fasta_file, trainer, model, save_prefix):
-    prot_list, preds, probs = get_prot_preds(fasta_file, trainer, model, combined=True)
+def fasta_description(fasta_file, trainer, model, save_prefix, subsample=None):
+    if subsample is None:
+        prot_list, preds, probs = get_prot_preds(fasta_file, trainer, model, combined=True)
+    else:
+        prot_list, preds, probs = get_prot_preds(fasta_file, trainer, model, combined=False, seq_set_size=subsample)
     top_preds = [pred[0] for pred in preds]# get top generation from beam search for each batch
     top_probs = [prob[0] for prob in probs]# get top description's probability from beam search for each batch
     word_preds = convert_preds_to_words(top_preds, model.vocab) 
@@ -48,7 +53,8 @@ def main(args):
     model.len_penalty_param = args.len_penalty
     trainer = Trainer(gpus=num_gpus, logger=False)
     if not args.annot_file:
-        fasta_description(args.input_file, trainer, model, args.save_prefix)
+        for i in range(args.multisample):
+            fasta_description(args.input_file, trainer, model, args.save_prefix + '_sample_' + str(i), subsample=args.subsample_num)
     else:
         annotation_file_description(args.input_file, trainer, model, args.save_prefix)
     

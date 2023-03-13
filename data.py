@@ -27,16 +27,25 @@ class SequenceDataset(Dataset):
     Sequence  centric way of getting samples; so a batch size of 64 would
     select 64 sequences. Uses fastas
     """
-    def __init__(self, fasta_fname):
+    def __init__(self, fasta_fname, num_samples=1):
         id2seq = load_fasta(fasta_fname)
         
         self.prot_list = sorted(list(id2seq.keys()))
         self.seqs = np.array([seq2AAinds(id2seq[prot]) for prot in self.prot_list], dtype=object)
         self.alphabet = CHARS
+        self.num_samples = num_samples
 
     def __getitem__(self, prot_ind):
-        
-        return ([self.prot_list[prot_ind], self.seqs[prot_ind]]) # to work with seq_go_collate_pad function
+        if self.num_samples != 1:
+            if self.num_samples == len(self.seqs):
+                selected_inds = np.random.choice(np.arange(len(self.seqs)), size=self.num_samples, replace=False)
+            else:
+                selected_inds = np.random.choice(np.arange(len(self.seqs)), size=self.num_samples)
+            selected_seqs = np.array(self.seqs)[selected_inds]
+            selected_prot_ids = np.array(self.prot_list)[selected_inds]
+            return ([selected_prot_ids, selected_seqs]) # to work with seq_go_collate_pad function
+        else: 
+            return ([self.prot_list[prot_ind], self.seqs[prot_ind]]) # to work with seq_go_collate_pad function
 
     def __len__(self):
         return len(self.seqs)
