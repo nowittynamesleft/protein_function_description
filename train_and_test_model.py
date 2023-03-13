@@ -111,7 +111,13 @@ def get_prot_preds(fasta_file, trainer, model, combined=False, seq_set_size=1):
     if not combined:
         # get invididual protein preds
         dl = DataLoader(seq_dataset, batch_size=1, collate_fn=partial(seq_go_collate_pad, seq_set_size=seq_set_size), pin_memory=True)
-        preds, probs = trainer.predict(model, dl)
+        #preds, probs = trainer.predict(model, dl)
+        pred_list = trainer.predict(model, dl)
+        preds = []
+        probs = []
+        for pred_tuple in pred_list:
+            preds.append(pred_tuple[0][0])
+            probs.append(pred_tuple[1][0])
     else:
         print('Producing a single combined prediction for all proteins in the following fasta file: ' + fasta_file)
         seqs = seq_dataset.seqs

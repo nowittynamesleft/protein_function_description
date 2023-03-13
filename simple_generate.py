@@ -35,7 +35,8 @@ def fasta_description(fasta_file, trainer, model, save_prefix, subsample=None):
     outfile = open(args.save_prefix + '_generated_descriptions.txt', 'w')
     for i, token_list in enumerate(word_preds):
         gen_desc = ' '.join(token_list)
-        outfile.write(gen_desc + '\nProbability: ' + str(torch.exp(top_probs[i]).item()) + '\n\n')
+        prots = ','.join(prot_list[i])
+        outfile.write('Proteins: ' + prots + '\n' + gen_desc + '\nProbability: ' + str(torch.exp(top_probs[i]).item()) + '\n\n')
     outfile.close()
 
 def annotation_file_description(annot_file, trainer, model, save_prefix):
