@@ -314,7 +314,7 @@ class SeqSet2SeqTransformer(pl.LightningModule):
              
             desc_log_prob = desc_log_prob/(len(correct_tokens)**self.len_penalty_param) # length penalty; if 0 then no length penalty
 
-        return torch.tensor(desc_log_prob.detach().cpu()), correct_token_log_probs
+        return desc_log_prob.clone().detach().cpu(), correct_token_log_probs
 
 
     def classify_seq_sets(self, S_padded, S_pad_mask, all_GO_padded, GO_pad_mask):

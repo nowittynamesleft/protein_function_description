@@ -278,7 +278,7 @@ class SequenceGOCSVDataset(Dataset):
         else:
             selected_inds = np.random.choice(np.arange(len(annotated_seqs)), size=self.num_samples)
         if self.sample:
-            selected_seqs = np.array(annotated_seqs)[selected_inds]
+            selected_seqs = np.array(annotated_seqs, dtype=object)[selected_inds]
             selected_prot_ids = np.array(annotated_prot_ids)[selected_inds]
         else:
             selected_seqs = np.array(annotated_seqs)
